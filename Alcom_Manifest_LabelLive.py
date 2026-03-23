@@ -103,40 +103,36 @@ def smart_shorten_description(desc: str, max_len: int = 40) -> str:
 def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, str]:
     """
     Parse APEL Extrusions manifest PDF using pdfplumber.
-
-    APEL Manifest table structure:
-    | ITEM NO. | DIE NUMBER | CUSTOMER PART NO. | DESCRIPTION ALLOY/TEMPER | LENGTH | FINISH |
-      ORDERED PIECES | ORDERED POUNDS | BACKORDERED PIECES | BACKORDERED POUNDS |
-      TICKET | THIS SHIPMENT PIECES | THIS SHIPMENT POUNDS |
-
-    Each ITEM can have multiple TICKET rows (bunks) listed vertically.
-    We use text extraction with coordinates to find ticket/qty pairs,
-    and match them to items by vertical position.
+    
+    Approach:
+    1. Extract items from table structure (SKU, description)
+    2. Extract ticket/qty pairs from text by position
+    3. Distribute tickets to items in order
 
     Returns:
         tuple: (DataFrame with bunks, manifest_number string)
     """
     all_text = ""
     bunks = []
-    items = []  # Store item data with y-position for matching
+    items = []
+    all_ticket_data = []  # Accumulate across all pages
+    debug_info = []
 
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
-            # Extract text for manifest number
             text = page.extract_text()
             if text:
                 all_text += text + "\n"
 
-            page_height = page.height
-
-            # Extract tables to get ITEM rows with SKU and DESCRIPTION
+            # Extract tables
             tables = page.extract_tables()
-
+            
+            # Find and process the main data table
             for table in tables:
                 # Find header row
                 header_row = None
                 header_indices = {}
-
+                
                 for row_idx, row in enumerate(table):
                     if row and any(cell and 'CUSTOMER PART' in str(cell).upper() for cell in row):
                         header_row = row_idx
@@ -150,135 +146,110 @@ def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, str]:
                                 elif 'ITEM' in cell_str and 'NO' in cell_str:
                                     header_indices['item'] = col_idx
                         break
-
+                
                 if header_row is None:
                     continue
-
-                # Get table bbox for text extraction
-                table_bbox = None
-
-                # Parse item rows - collect SKU, DESC, and y-position range
+                
+                debug_info.append(f"Found header at row {header_row}, indices: {header_indices}")
+                
+                # Parse rows
                 current_sku = None
                 current_desc = None
-                current_item = None
-                item_y_top = None
-                item_y_bottom = None
-
+                seen_skus = set()
+                
                 for row_idx in range(header_row + 1, len(table)):
                     row = table[row_idx]
                     if not row:
                         continue
-
-                    row_clean = [str(cell).strip() if cell else "" for cell in row]
-
-                    # Check for new ITEM NO.
-                    item_val = ""
-                    if 'item' in header_indices and header_indices['item'] < len(row_clean):
-                        item_val = row_clean[header_indices['item']]
-                        if item_val and item_val.isdigit():
-                            # Save previous item if exists
-                            if current_sku and item_y_top is not None:
-                                items.append({
-                                    "sku": current_sku,
-                                    "desc": current_desc,
-                                    "y_top": item_y_top,
-                                    "y_bottom": item_y_bottom
-                                })
-                            current_item = item_val
-                            item_y_top = None
-                            item_y_bottom = None
-
-                    # Get SKU - extract first valid pattern
+                    
+                    row_clean = [str(c).strip() if c else "" for c in row]
+                    
+                    # Get SKU
                     if 'sku' in header_indices and header_indices['sku'] < len(row_clean):
                         sku_candidate = row_clean[header_indices['sku']]
                         sku_match = re.search(r'(\d{2}-\d{5}-\d{4})', str(sku_candidate))
                         if sku_match:
-                            current_sku = sku_match.group(1)
-
-                    # Get Description - look for TUBE
+                            new_sku = sku_match.group(1)
+                            if new_sku not in seen_skus:
+                                current_sku = new_sku
+                                seen_skus.add(current_sku)
+                    
+                    # Get Description
                     if 'description' in header_indices and header_indices['description'] < len(row_clean):
                         desc_candidate = row_clean[header_indices['description']]
-                        if desc_candidate and 'TUBE' in str(desc_candidate).upper():
+                        if desc_candidate and ('TUBE' in str(desc_candidate).upper() or re.search(r'\d+x\d+', str(desc_candidate))):
                             current_desc = str(desc_candidate).strip()
-
-                # Save last item
-                if current_sku:
-                    items.append({
-                        "sku": current_sku,
-                        "desc": current_desc,
-                        "y_top": item_y_top,
-                        "y_bottom": item_y_bottom
+                    
+                    # Save item when we have both SKU and description
+                    if current_sku and current_desc and current_sku not in [i['sku'] for i in items]:
+                        items.append({"sku": current_sku, "desc": current_desc})
+                        debug_info.append(f"Found item: {current_sku} - {current_desc[:40]}")
+            
+            # Extract ticket/qty pairs from text
+            words = page.extract_words()
+            page_width = page.width
+            ticket_column_x = page_width * 0.7
+            
+            lines = {}
+            for word in words:
+                y_key = round(word['top'])
+                if y_key not in lines:
+                    lines[y_key] = []
+                lines[y_key].append(word)
+            
+            page_ticket_data = []
+            for y_pos, line_words in sorted(lines.items()):
+                line_words.sort(key=lambda w: w['x0'])
+                for i, word in enumerate(line_words):
+                    if word['x0'] < ticket_column_x:
+                        continue
+                    text_word = word['text'].strip()
+                    ticket_match = re.match(r'^(\d{5,6})$', text_word)
+                    if ticket_match:
+                        ticket_num = ticket_match.group(1)
+                        if ticket_num.startswith('23'):
+                            continue
+                        for j in range(i + 1, min(i + 4, len(line_words))):
+                            qty_word = lines[y_pos][j]['text'].strip()
+                            qty_match = re.match(r'^(\d+)$', qty_word)
+                            if qty_match:
+                                qty_num = int(qty_match.group(1))
+                                if 0 < qty_num < 10000:
+                                    page_ticket_data.append((ticket_num, qty_num))
+                                    debug_info.append(f"Found ticket: {ticket_num}, qty: {qty_num}")
+                                    break
+            
+            all_ticket_data.extend(page_ticket_data)
+            debug_info.append(f"Page tickets: {len(page_ticket_data)}, Total so far: {len(all_ticket_data)}")
+    
+    debug_info.append(f"Total items: {len(items)}")
+    debug_info.append(f"Items: {items}")
+    debug_info.append(f"Total tickets: {len(all_ticket_data)}")
+    
+    # Distribute tickets to items
+    if all_ticket_data and items:
+        tickets_per_item = len(all_ticket_data) // len(items)
+        remainder = len(all_ticket_data) % len(items)
+        
+        ticket_idx = 0
+        for item_idx, item in enumerate(items):
+            count = tickets_per_item + (1 if item_idx < remainder else 0)
+            debug_info.append(f"Item {item['sku']} gets {count} tickets")
+            for _ in range(count):
+                if ticket_idx < len(all_ticket_data):
+                    ticket_num, qty_num = all_ticket_data[ticket_idx]
+                    bunks.append({
+                        "SKU": item["sku"],
+                        "DESCRIPTION": smart_shorten_description(item["desc"]),
+                        "QTY_pieces": qty_num,
+                        "TICKET": ticket_num,
+                        "Labels_to_Print": 2
                     })
-
-            # Now extract text with positions to find ticket/qty pairs
-            # and match them to items
-            if items:
-                # Extract words with positions
-                words = page.extract_words()
-
-                # Find ticket numbers and quantities by position
-                # Ticket column is typically to the right, quantity is rightmost
-                page_width = page.width
-
-                # Group words by line (similar y-coordinate)
-                lines = {}
-                for word in words:
-                    y_key = round(word['top'] / 5) * 5  # Group by 5-pixel bands
-                    if y_key not in lines:
-                        lines[y_key] = []
-                    lines[y_key].append(word)
-
-                # For each line, look for ticket + quantity pattern
-                ticket_data = []  # (y_position, ticket, qty)
-                for y_pos, line_words in sorted(lines.items()):
-                    # Sort words by x position (left to right)
-                    line_words.sort(key=lambda w: w['x0'])
-
-                    # Look for ticket (5-6 digits) followed by quantity
-                    for i, word in enumerate(line_words):
-                        text = word['text'].strip()
-                        # Check for ticket number
-                        ticket_match = re.match(r'^(\d{5,6})$', text)
-                        if ticket_match:
-                            ticket_num = ticket_match.group(1)
-                            # Look for quantity in next few words (to the right)
-                            for j in range(i + 1, min(i + 4, len(line_words))):
-                                qty_word = lines[y_pos][j]['text'].strip()
-                                qty_match = re.match(r'^(\d+)$', qty_word)
-                                if qty_match:
-                                    qty_num = int(qty_match.group(1))
-                                    if qty_num > 0 and qty_num < 10000:  # Reasonable quantity
-                                        ticket_data.append((y_pos, ticket_num, qty_num))
-                                        break
-
-                # Match tickets to items by y-position
-                # Simple approach: assign tickets to items in order
-                if ticket_data and items:
-                    tickets_per_item = len(ticket_data) // len(items) if items else 0
-
-                    for i, (y_pos, ticket_num, qty_num) in enumerate(ticket_data):
-                        # Find which item this ticket belongs to
-                        item_idx = min(i // max(tickets_per_item, 1), len(items) - 1) if tickets_per_item > 0 else 0
-                        item = items[item_idx]
-
-                        bunk = {
-                            "SKU": item["sku"],
-                            "DESCRIPTION": smart_shorten_description(item["desc"] or ""),
-                            "QTY_pieces": qty_num,
-                            "TICKET": ticket_num,
-                            "Labels_to_Print": 2
-                        }
-                        bunks.append(bunk)
-
+                    ticket_idx += 1
+    
     manifest_number = extract_manifest_number(all_text)
-
-    # Show debug info if no bunks found
-    if not bunks:
-        st.warning("No bunk data found in PDF. Check PDF format or try manual entry.")
-        with st.expander("Debug Info"):
-            st.text(f"Total items found: {len(items)}")
-            st.text(f"Items: {items[:5]}")
-
+    st.session_state.debug_info = debug_info
+    
     df = pd.DataFrame(bunks)
     return df, manifest_number
 
@@ -311,6 +282,8 @@ if 'manifest_number' not in st.session_state:
     st.session_state.manifest_number = ""
 if 'processed' not in st.session_state:
     st.session_state.processed = False
+if 'debug_info' not in st.session_state:
+    st.session_state.debug_info = []
 
 
 # ============================================================================
@@ -372,11 +345,11 @@ progress_bar = st.progress(0)
 # Process manifest
 if process_btn and uploaded_file:
     progress_bar.progress(25, text="Reading PDF...")
-    
+
     try:
         df, manifest_num = parse_manifest_pdf(uploaded_file)
         progress_bar.progress(75, text="Creating data table...")
-        
+
         if not df.empty:
             # Apply default labels
             df["Labels_to_Print"] = default_labels
@@ -387,6 +360,11 @@ if process_btn and uploaded_file:
             st.rerun()
         else:
             st.warning("No data extracted from PDF. Please check the file format.")
+            # Show debug info even on failure
+            if st.session_state.get('debug_info'):
+                with st.expander("🔍 Debug Info"):
+                    for line in st.session_state.debug_info:
+                        st.text(line)
     except Exception as e:
         st.error(f"Error processing PDF: {str(e)}")
     finally:
@@ -395,7 +373,7 @@ if process_btn and uploaded_file:
 # Display data editor and export
 if st.session_state.processed and not st.session_state.manifest_df.empty:
     st.markdown("---")
-    
+
     # Metrics
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -407,9 +385,9 @@ if st.session_state.processed and not st.session_state.manifest_df.empty:
     with col3:
         total_pieces = int(st.session_state.manifest_df["QTY_pieces"].sum())
         st.metric("🔧 Total Pieces", total_pieces)
-    
+
     st.markdown("---")
-    
+
     # Data editor
     st.subheader("Edit Manifest Data")
 
@@ -430,21 +408,21 @@ if st.session_state.processed and not st.session_state.manifest_df.empty:
         },
         num_rows="dynamic"
     )
-    
+
     # Update session state with edits
     st.session_state.manifest_df = edited_df
-    
+
     # Recalculate total
     total_labels = int(edited_df["Labels_to_Print"].sum())
-    
+
     st.divider()
-    
+
     # Export section
     st.subheader("📥 Export")
-    
+
     excel_data = create_excel_output(edited_df, st.session_state.manifest_number)
     filename = f"LabelLIVE_manifest_{st.session_state.manifest_number}.xlsx"
-    
+
     st.download_button(
         label="Download Excel for Label LIVE",
         data=excel_data,
@@ -453,9 +431,16 @@ if st.session_state.processed and not st.session_state.manifest_df.empty:
         use_container_width=True,
         type="primary"
     )
-    
+
     st.caption(f"Filename: `{filename}`")
     st.caption("✅ Excel contains exactly 3 columns: SKU, DESCRIPTION, QTY (1 row per bunk)")
+
+    # Debug info section
+    if st.session_state.debug_info:
+        st.divider()
+        with st.expander("🔍 Debug Info", expanded=False):
+            for line in st.session_state.debug_info:
+                st.text(line)
 
 elif uploaded_file and not st.session_state.processed:
     st.info("Click 'Process Manifest' to extract bunk data from the PDF.")
