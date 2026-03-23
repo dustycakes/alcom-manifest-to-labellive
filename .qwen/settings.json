@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/dustycakes/projects/alcommander/manifest-2-label/venv/bin/streamlit *)",
+      "Bash(curl *)",
+      "Bash(git remote *)",
+      "Bash(git add *)"
+    ]
+  }
+}
