@@ -2,7 +2,7 @@
 
 ## Date: 2026-03-23
 
-### PDF Parsing Architecture
+### Bug #1: Data Lost Across Page Iterations
 
 **CRITICAL: Accumulate data across ALL pages before processing**
 
@@ -21,6 +21,30 @@ for page in pdf.pages:
     page_ticket_data = []
     # ... extract tickets ...
     all_ticket_data.extend(page_ticket_data)  # Accumulate
+```
+
+### Bug #2: Merged Cells - Multiple Items in One Cell
+
+**Problem:** pdfplumber merges ALL rows into a single cell for complex manifests:
+```
+SKU cell: "70-11160-0990 70-11162-1010 70-11163-1450..."
+DESC cell: "TUBE, 01.000x01.500x...\nTUBE, 01.500x03.000x...\n..."
+```
+
+**Solution:** Extract individual SKU/description pairs using regex:
+```python
+# Find all SKUs
+sku_matches = list(re.finditer(r'(\d{2}-\d{5}-\d{4})', sku_cell))
+
+# Find all descriptions
+desc_pattern = r'((?:TUBE|ANGLE|FLAT BAR)[,\s\n]*[\d\.\sxX]+)'
+desc_matches = list(re.finditer(desc_pattern, desc_cell, re.IGNORECASE))
+
+# Match by position (1st SKU → 1st description)
+for i, sku_match in enumerate(sku_matches):
+    sku = sku_match.group(1)
+    desc = desc_matches[i].group(1).strip() if i < len(desc_matches) else ""
+    items.append({"sku": sku, "desc": desc})
 ```
 
 ### APEL Extrusions Manifest Structure

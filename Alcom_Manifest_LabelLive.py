@@ -152,38 +152,50 @@ def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, str]:
                 
                 debug_info.append(f"Found header at row {header_row}, indices: {header_indices}")
                 
-                # Parse rows
+                # Parse rows - handle merged cells with multiple items
                 current_sku = None
                 current_desc = None
                 seen_skus = set()
-                
+
                 for row_idx in range(header_row + 1, len(table)):
                     row = table[row_idx]
                     if not row:
                         continue
-                    
+
                     row_clean = [str(c).strip() if c else "" for c in row]
-                    
-                    # Get SKU
+
+                    # Get all SKUs from the cell (may contain multiple)
+                    sku_cell = ""
                     if 'sku' in header_indices and header_indices['sku'] < len(row_clean):
-                        sku_candidate = row_clean[header_indices['sku']]
-                        sku_match = re.search(r'(\d{2}-\d{5}-\d{4})', str(sku_candidate))
-                        if sku_match:
-                            new_sku = sku_match.group(1)
-                            if new_sku not in seen_skus:
-                                current_sku = new_sku
-                                seen_skus.add(current_sku)
+                        sku_cell = row_clean[header_indices['sku']]
                     
-                    # Get Description
+                    # Get all descriptions from the cell (may contain multiple)
+                    desc_cell = ""
                     if 'description' in header_indices and header_indices['description'] < len(row_clean):
-                        desc_candidate = row_clean[header_indices['description']]
-                        if desc_candidate and ('TUBE' in str(desc_candidate).upper() or re.search(r'\d+x\d+', str(desc_candidate))):
-                            current_desc = str(desc_candidate).strip()
+                        desc_cell = row_clean[header_indices['description']]
+
+                    # Extract individual SKU/description pairs from merged cells
+                    # Find all SKUs
+                    sku_matches = list(re.finditer(r'(\d{2}-\d{5}-\d{4})', sku_cell))
                     
-                    # Save item when we have both SKU and description
-                    if current_sku and current_desc and current_sku not in [i['sku'] for i in items]:
-                        items.append({"sku": current_sku, "desc": current_desc})
-                        debug_info.append(f"Found item: {current_sku} - {current_desc[:40]}")
+                    # Find all descriptions (TUBE, ANGLE, FLAT BAR, etc. with dimensions)
+                    desc_pattern = r'((?:TUBE|ANGLE|FLAT BAR|CHANNEL|ZEE|I BEAM)[,\s\n]*[\d\.\sxX]+)'
+                    desc_matches = list(re.finditer(desc_pattern, desc_cell, re.IGNORECASE))
+                    
+                    # Match SKUs to descriptions by position
+                    for i, sku_match in enumerate(sku_matches):
+                        sku = sku_match.group(1)
+                        if sku not in seen_skus:
+                            # Get corresponding description (same index or nearest)
+                            desc = ""
+                            if i < len(desc_matches):
+                                desc = desc_matches[i].group(1).strip()
+                            elif desc_matches:
+                                desc = desc_matches[-1].group(1).strip()
+                            
+                            items.append({"sku": sku, "desc": desc})
+                            seen_skus.add(sku)
+                            debug_info.append(f"Found item: {sku} - {desc[:30]}")
             
             # Extract ticket/qty pairs from text
             words = page.extract_words()
