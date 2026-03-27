@@ -428,9 +428,9 @@ with tab2:
     if missing_count > 0:
         st.warning(f"⚠️ {missing_count} SKUs missing custom descriptions")
     
-    # Display editable table
+    # Display editable table with auto-save
     st.subheader(f"Descriptions ({len(filtered_df)} shown)")
-    
+
     edited_lookup = st.data_editor(
         filtered_df,
         use_container_width=True,
@@ -440,24 +440,49 @@ with tab2:
             "GENIUS #": st.column_config.TextColumn("SKU (GENIUS #)", width="medium"),
             "CUSTOM DESCRIPTION": st.column_config.TextColumn("Custom Description", width="large"),
             "DESCRIPTION": st.column_config.TextColumn("Original Description", width="large"),
-        }
+        },
+        key="edited_lookup_editor"
     )
-    
-    # Save changes
-    col1, col2, col3 = st.columns([1, 1, 4])
-    with col1:
-        if st.button("💾 Save Changes", type="primary", use_container_width=True):
-            lookup.df = edited_lookup
+
+    # Auto-save: detect changes and persist to master + file
+    # Compare edited_lookup against master to find changes
+    for idx, row in edited_lookup.iterrows():
+        sku = str(row['GENIUS #']).strip()
+        if not sku:
+            continue
+        # Find matching row in master dataframe
+        mask = lookup.df['GENIUS #'] == sku
+        if mask.any():
+            current_custom = str(lookup.df.loc[mask, 'CUSTOM DESCRIPTION'].iloc[0])
+            current_desc = str(lookup.df.loc[mask, 'DESCRIPTION'].iloc[0])
+            new_custom = str(row['CUSTOM DESCRIPTION'])
+            new_desc = str(row.get('DESCRIPTION', ''))
+            # If values changed, update master and save
+            if current_custom != new_custom or current_desc != new_desc:
+                lookup.df.loc[mask, 'CUSTOM DESCRIPTION'] = new_custom
+                lookup.df.loc[mask, 'DESCRIPTION'] = new_desc
+                lookup.save()
+                st.toast(f"✓ Saved {sku}", icon="✅")
+        else:
+            # New row added via editor
+            lookup.add_or_update(sku, row['CUSTOM DESCRIPTION'], row.get('DESCRIPTION', ''))
             lookup.save()
-            st.success("Saved!")
-            st.rerun()
-    
-    with col2:
-        if st.button("🔄 Reload from File", use_container_width=True):
-            lookup._load()
-            st.session_state.description_lookup = lookup
-            st.rerun()
-    
+            st.toast(f"✓ Added {sku}", icon="✅")
+
+    # Export button
+    if st.button("📥 Export Lookup Table"):
+        from io import BytesIO
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            lookup.get_all_descriptions().to_excel(writer, index=False)
+        output.seek(0)
+        st.download_button(
+            label="📥 Download Excel",
+            data=output,
+            file_name="Manifest_Description_Conversion.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
     # Add new entry
     st.divider()
     st.subheader("Add New Entry")

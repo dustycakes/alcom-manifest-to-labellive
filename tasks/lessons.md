@@ -1,5 +1,42 @@
 # Lessons Learned - Alcom Manifest to Label LIVE
 
+## Date: 2026-03-27
+
+### Bug #4: Save Changes Overwrites Dataset with Filtered Results
+
+**Problem:** "Save Changes" button assigned the filtered `edited_lookup` DataFrame directly to `lookup.df`, then saved. If user searched for one SKU and clicked Save, it overwrote the entire 334-row dataset with just the filtered results.
+
+**Symptoms:**
+- User adds new SKU via "Add Entry" → appears in table
+- User searches to isolate the new SKU
+- User clicks "Save Changes" (unsure if needed)
+- Entire lookup table reduced to only the filtered/searched rows
+
+**Root Cause:**
+```python
+# BUGGY CODE
+if st.button("Save Changes"):
+    lookup.df = edited_lookup  # Assigned filtered view to master
+    lookup.save()              # Saved only filtered rows
+```
+
+**Solution:** Remove "Save Changes" button entirely. Implement auto-save that:
+1. Compares edited rows against master `lookup.df` by SKU
+2. Updates only changed rows in master dataframe
+3. Saves full dataset (never the filtered view)
+4. Shows toast notification on each save
+
+**New UX:**
+- Inline edits → auto-save immediately with ✓ toast
+- Add Entry → auto-saves immediately (unchanged)
+- Export button → download full lookup table for mass edits in Excel
+- Upload → re-import edited Excel file
+
+**Files:**
+- `Alcom_Manifest_LabelLive.py` - Removed Save Changes + Reload buttons, added auto-save logic + Export
+
+---
+
 ## Date: 2026-03-26
 
 ### Architecture Change: Custom Description Lookup Table
