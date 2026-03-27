@@ -2,3 +2,10 @@ streamlit
 pdfplumber
 pandas
 openpyxl
+
+# OCR support (optional - for scanned manifests like Momentum)
+# pip install pytesseract pillow pymupdf
+# Also requires system package: tesseract (sudo pacman -S tesseract tesseract-data-eng)
+# pytesseract
+# pillow
+# pymupdf

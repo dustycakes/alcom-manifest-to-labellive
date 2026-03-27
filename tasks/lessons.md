@@ -49,6 +49,60 @@ Alcom_Manifest_LabelLive.py
 - `parsers/` - New package with parser architecture
 - `Alcom_Manifest_LabelLive.py` - Added format selector dropdown
 
+### OCR Parser - Momentum Bill of Lading
+
+**Format:** Scanned Bill of Lading documents (image-based PDFs)
+- Requires: `pytesseract`, `pillow`, `pymupdf` + system `tesseract`
+- Renders PDF pages as images, runs OCR to extract text
+
+**Momentum Format:**
+- Document type: "STRAIGHT BILL OF LADING - SHORT FORM"
+- Tickets: 6-digit (e.g., `539735`)
+- Pattern: `ticket pieces net_lbs gross_lbs` (e.g., "539735 24 537 549")
+- SKUs: Same format as Apel/BRT (`XX-XXXXX-XXXX`)
+
+**OCR Parser Design:**
+- Isolated from Apel/BRT parsers - changes don't affect them
+- Supports multiple formats: Apel, BRT, Momentum
+- Momentum detection: 6-digit ticket + 3 numbers pattern
+
+**Results:**
+| Metric | Value |
+|--------|-------|
+| Momentum bunks | 12 |
+| Momentum SKUs | 5 |
+| Manifest number | 153082 |
+
+**Files:**
+- `parsers/ocr_parser.py` - OCR parser with Momentum support
+- `requirements.txt` - Added optional OCR dependencies (commented)
+
+### OCR Bug Fix: Streamlit UploadedFile BytesIO
+
+**Problem:** OCR parser returned "No data extracted" in Streamlit UI, but worked in direct Python tests.
+
+**Root Cause:** OCR parser used `pdf_file.name` to get file path for pymupdf. Streamlit's `UploadedFile` is a BytesIO wrapper without a real file path, so `pdf_path` was `None` and pymupdf couldn't open it.
+
+```python
+# BUGGY CODE
+pdf_path = pdf_file.name if hasattr(pdf_file, 'name') else None
+if pdf_path:
+    doc = fitz.open(pdf_path)  # Works with file path
+else:
+    # Fallback to pdfplumber - useless for scanned PDFs!
+```
+
+**Fix:** Read PDF bytes directly and use pymupdf's stream API:
+
+```python
+# FIXED CODE
+pdf_bytes = pdf_file.read()
+doc = fitz.open(stream=pdf_bytes, filetype="pdf")  # Works with BytesIO
+```
+
+**Files:**
+- `parsers/ocr_parser.py` - Fixed to handle BytesIO uploaded files
+
 ---
 
 ### Bug #4: Save Changes Overwrites Dataset with Filtered Results
