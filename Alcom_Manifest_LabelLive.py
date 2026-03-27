@@ -157,6 +157,7 @@ def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, list]:
     """
     Parse manifest PDF - extract SKU, QTY, and TICKET only.
     Uses text-based extraction which correctly associates SKUs with tickets.
+    Preserves order from the manifest (tickets appear in same order as PDF).
     """
     all_text = ""
     debug_info = []
@@ -171,26 +172,20 @@ def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, list]:
     tickets_from_text = extract_tickets_from_text(all_text)
     debug_info.append(f"Extracted {len(tickets_from_text)} tickets from text")
 
-    # Group by SKU
-    tickets_by_sku = {}
+    # Create bunks in order (preserve manifest order, don't group by SKU)
+    bunks = []
     for ticket, qty, sku_context in tickets_from_text:
         if sku_context:
-            if sku_context not in tickets_by_sku:
-                tickets_by_sku[sku_context] = []
-            tickets_by_sku[sku_context].append((ticket, qty))
-
-    # Create bunks
-    bunks = []
-    for sku, ticket_qtys in tickets_by_sku.items():
-        for ticket, qty in ticket_qtys:
             bunks.append({
-                "SKU": sku,
+                "SKU": sku_context,
                 "QTY_pieces": qty,
                 "TICKET": ticket
             })
 
+    # Count unique SKUs for debug info
+    unique_skus = len(set(b["SKU"] for b in bunks))
     debug_info.append(f"Total bunks: {len(bunks)}")
-    debug_info.append(f"Unique SKUs: {len(tickets_by_sku)}")
+    debug_info.append(f"Unique SKUs: {unique_skus}")
 
     df = pd.DataFrame(bunks)
     return df, debug_info
@@ -270,7 +265,7 @@ with tab1:
         st.divider()
         st.markdown("### Instructions")
         st.markdown("""
-        1. Upload APEL Extrusions manifest PDF
+        1. Upload manifest PDF
         2. Review extracted SKUs and quantities
         3. Edit descriptions if needed
         4. Download Excel for Label LIVE
@@ -278,9 +273,9 @@ with tab1:
     
     # File uploader
     uploaded_file = st.file_uploader(
-        "Upload APEL Extrusions Manifest PDF",
+        "Upload",
         type=['pdf'],
-        help="Upload the manifest PDF from APEL Extrusions"
+        help="Upload the manifest and hit Process Manifest"
     )
     
     col1, col2 = st.columns([1, 4])

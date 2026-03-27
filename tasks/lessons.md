@@ -28,7 +28,7 @@
 - All tickets assigned to first SKU (70-11160-0990)
 - Missing Page 1 item (SKU 70-11243-2640, Ticket 647532, QTY 116)
 
-**Root Cause:** 
+**Root Cause:**
 - Table structure varies between manifests (Apel 1/2 vs Apel 3)
 - Apel 3 has 4 SKUs in one cell, with tickets/shipments grouped by item with totals as delimiters
 - Grouping logic couldn't handle all edge cases (e.g., shipment total `465` < 500 threshold)
@@ -44,10 +44,79 @@ def extract_tickets_from_text(text: str):
         sku_match = re.search(r'(\d{2}-\d{5}-\d{4})', line)
         if sku_match:
             current_sku = sku_match.group(1)
-        
+
         # Find tickets (64xxxx or 65xxxx) with qty next to them
         for word in words:
             if re.match(r'^(64|65)\d{4}$', word):
+                # Next number is quantity
+                ...
+```
+
+**Results:**
+| Metric | Before | After |
+|--------|--------|-------|
+| Apel 3 bunks | 41 | 42 |
+| Apel 3 unique SKUs | 3 | 14 |
+| Page 1 item | Missing | ✓ Found |
+
+### PDF Format Variations
+
+**Apel 1/2 Format:**
+- One item per table row
+- Tickets in text below table
+- Text extraction works well
+
+**Apel 3 Format:**
+- Multiple items per table row (merged cells)
+- Tickets in table cells with totals as delimiters
+- Text extraction MORE reliable than cell extraction
+
+**Lesson:** Text-based extraction is more robust across format variations because the PDF text flow preserves SKU→ticket proximity regardless of table structure.
+
+### Output Order Matches Manifest
+
+**Issue:** Initial output grouped tickets by SKU, which made verification against the PDF difficult when the same SKU appeared on multiple pages.
+
+**Solution:** Preserve the order from text extraction - tickets appear in output in the same order they appear in the manifest.
+
+**Benefit:** Side-by-side verification with PDF is now straightforward - row N in output corresponds to the Nth ticket in the manifest.
+
+### Key Patterns
+
+```python
+# SKU pattern
+r'\d{2}-\d{5}-\d{4}'  # e.g., 70-11160-0990
+
+# Ticket pattern (6 digits starting with 64 or 65)
+r'^(64|65)\d{4}$'  # e.g., 647532
+
+# Filter die numbers (start with 23)
+if ticket.startswith('23'): continue
+
+# Quantity pattern (small number after ticket)
+r'^\d+$'  # 1-3 digits typically
+```
+
+### Debug Files
+
+Saved to `debug ref/` folder:
+- `Apel3_Output.xlsx` - Full extracted data with custom descriptions
+- `Apel3_Summary.txt` - Text summary by SKU with ticket/qty pairs
+- `Apel1_Analysis.md` - Analysis of multi-page manifest structure
+
+### Commands
+
+```bash
+# Run locally
+streamlit run Alcom_Manifest_LabelLive.py
+
+# Test parsing
+python3 -c "from Alcom_Manifest_LabelLive import parse_manifest_pdf; df, _ = parse_manifest_pdf(open('Manifests/Apel 3.PDF', 'rb')); print(len(df), 'bunks')"
+```
+
+---
+
+## Date: 2026-03-23
                 # Next number is quantity
                 ...
 ```
