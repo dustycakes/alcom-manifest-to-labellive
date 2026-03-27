@@ -9,6 +9,7 @@ import re
 from io import BytesIO
 from datetime import datetime
 from custom_descriptions import CustomDescriptionLookup
+from parsers import get_parser, get_available_formats, PARSERS
 
 # ============================================================================
 # CONFIGURATION
@@ -153,42 +154,24 @@ def extract_tickets_from_text(text: str) -> list[tuple[str, int, str]]:
     return tickets
 
 
-def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, list]:
+def parse_manifest_pdf(pdf_file, format_type: str) -> tuple[pd.DataFrame, list, str]:
     """
-    Parse manifest PDF - extract SKU, QTY, and TICKET only.
-    Uses text-based extraction which correctly associates SKUs with tickets.
-    Preserves order from the manifest (tickets appear in same order as PDF).
+    Parse manifest PDF using specified format parser.
+    
+    Args:
+        pdf_file: File-like object containing PDF
+        format_type: Parser format id ('apel', 'brt', 'ocr')
+        
+    Returns:
+        Tuple of (DataFrame, debug_info list, manifest_number)
     """
-    all_text = ""
-    debug_info = []
-
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                all_text += text + "\n"
-
-    # Use text-based extraction as primary method
-    tickets_from_text = extract_tickets_from_text(all_text)
-    debug_info.append(f"Extracted {len(tickets_from_text)} tickets from text")
-
-    # Create bunks in order (preserve manifest order, don't group by SKU)
-    bunks = []
-    for ticket, qty, sku_context in tickets_from_text:
-        if sku_context:
-            bunks.append({
-                "SKU": sku_context,
-                "QTY_pieces": qty,
-                "TICKET": ticket
-            })
-
-    # Count unique SKUs for debug info
-    unique_skus = len(set(b["SKU"] for b in bunks))
-    debug_info.append(f"Total bunks: {len(bunks)}")
-    debug_info.append(f"Unique SKUs: {unique_skus}")
-
-    df = pd.DataFrame(bunks)
-    return df, debug_info
+    try:
+        parser = get_parser(format_type)
+        result = parser.parse(pdf_file)
+        
+        return result.df, result.debug_info, result.manifest_number
+    except Exception as e:
+        return pd.DataFrame(), [f"Parser error: {str(e)}"], ""
 
 
 def create_excel_output(df: pd.DataFrame, manifest_number: str, lookup: CustomDescriptionLookup) -> BytesIO:
@@ -265,19 +248,29 @@ with tab1:
         st.divider()
         st.markdown("### Instructions")
         st.markdown("""
-        1. Upload manifest PDF
-        2. Review extracted SKUs and quantities
-        3. Edit descriptions if needed
-        4. Download Excel for Label LIVE
+        1. Select manifest format
+        2. Upload manifest PDF
+        3. Review extracted SKUs and quantities
+        4. Edit descriptions if needed
+        5. Download Excel for Label LIVE
         """)
-    
+
     # File uploader
     uploaded_file = st.file_uploader(
         "Upload",
         type=['pdf'],
         help="Upload the manifest and hit Process Manifest"
     )
-    
+
+    # Manifest format selector
+    format_options = {name: PARSERS[name]().format_name for name in get_available_formats()}
+    selected_format = st.selectbox(
+        "Manifest Format",
+        options=list(format_options.keys()),
+        format_func=lambda x: format_options[x],
+        help="Select the manifest supplier format"
+    )
+
     col1, col2 = st.columns([1, 4])
     with col1:
         process_btn = st.button("Process Manifest", type="primary", use_container_width=True)
@@ -288,18 +281,19 @@ with tab1:
                 st.session_state.manifest_number = ""
                 st.session_state.processed = False
                 st.rerun()
-    
+
     # Process manifest
     if process_btn and uploaded_file:
         try:
-            df, debug_info = parse_manifest_pdf(uploaded_file)
-            
+            df, debug_info, manifest_number = parse_manifest_pdf(uploaded_file, selected_format)
+
             if not df.empty:
                 df["Labels_to_Print"] = default_labels
                 st.session_state.manifest_df = df
-                st.session_state.manifest_number = extract_manifest_number(uploaded_file.read().decode('latin-1', errors='ignore'))
+                st.session_state.manifest_number = manifest_number
                 st.session_state.processed = True
                 st.session_state.debug_info = debug_info
+                st.session_state.selected_format = selected_format
                 st.rerun()
             else:
                 st.warning("No data extracted from PDF. Please check the file format.")
@@ -380,6 +374,8 @@ with tab1:
         # Debug info
         if st.session_state.debug_info:
             with st.expander("🔍 Debug Info"):
+                if hasattr(st.session_state, 'selected_format'):
+                    st.text(f"Parser: {st.session_state.selected_format}")
                 for line in st.session_state.debug_info:
                     st.text(line)
     
@@ -394,27 +390,7 @@ with tab2:
     """)
     
     lookup = st.session_state.description_lookup
-    
-    # Upload/refresh lookup table
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        uploaded_lookup = st.file_uploader(
-            "Upload updated lookup table (optional)",
-            type=['xlsx', 'xls'],
-            key="lookup_uploader"
-        )
-    with col2:
-        if uploaded_lookup:
-            try:
-                new_df = pd.read_excel(uploaded_lookup)
-                new_df.columns = [col.strip().upper() for col in new_df.columns]
-                lookup.df = new_df
-                st.success("Lookup table updated!")
-            except Exception as e:
-                st.error(f"Error loading file: {e}")
-    
-    st.divider()
-    
+
     # Search/filter
     search_query = st.text_input("🔍 Search SKUs or descriptions", placeholder="Enter SKU or description...")
     
@@ -503,3 +479,25 @@ with tab2:
             st.rerun()
         else:
             st.error("SKU and Custom Description are required")
+
+    # Upload/refresh lookup table
+    st.divider()
+    st.subheader("Import Lookup Table")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        uploaded_lookup = st.file_uploader(
+            "Upload updated lookup table (optional)",
+            type=['xlsx', 'xls'],
+            key="lookup_uploader"
+        )
+    with col2:
+        if uploaded_lookup:
+            try:
+                new_df = pd.read_excel(uploaded_lookup)
+                new_df.columns = [col.strip().upper() for col in new_df.columns]
+                lookup.df = new_df
+                lookup.save()
+                st.success("Lookup table updated!")
+            except Exception as e:
+                st.error(f"Error loading file: {e}")

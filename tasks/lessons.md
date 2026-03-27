@@ -2,6 +2,55 @@
 
 ## Date: 2026-03-27
 
+### Architecture: Multi-Format Parser System
+
+**Problem:** Need to support multiple manifest formats (Apel, BRT, Momentum/OCR, future suppliers) without code becoming unmaintainable.
+
+**Solution:** Abstract base class + registry pattern with explicit format selection (Option B → Option C path).
+
+**Design:**
+```
+parsers/
+  ├── base.py          # ManifestParser ABC, ParseResult dataclass
+  ├── apel_parser.py   # Apel Extrusions (existing logic)
+  ├── brt_parser.py    # BRT Extrusions (new)
+  └── ocr_parser.py    # Scanned documents (future: pytesseract)
+
+Alcom_Manifest_LabelLive.py
+  └─ UI: selectbox("Manifest Format") → parser.parse()
+```
+
+**Key Decisions:**
+1. **Option B (User Selects Format)** for v1 - explicit, debuggable, no fragile auto-detection
+2. **Path to Option C** - each parser has `can_parse()` method for future auto-detect
+3. **OCR ready** - OCRParser stub included, can enable when tesseract installed
+4. **Easy extension** - Add new parser: create class, register in `parsers/__init__.py`
+
+**BRT Format Differences:**
+- Header: "SHIPPING MANIFEST" + brtextrusions.com
+- Tickets: 7-digit (1xxxxxx), not 64/65xxxx like Apel
+- Text format: `ticket qty weight` (e.g., "1373341 97 407")
+- Multiple SKUs per page, text-based extraction works best
+
+**BRT Parser Bug Fixes:**
+1. **Table extraction unreliable** - pdfplumber merges rows incorrectly → switched to text-based extraction
+2. **Weight with commas** - Pattern `1,465` wasn't matching `\d{2,4}` → changed to `[\d,]{2,5}`
+3. **2-digit weights** - Weight `68` wasn't matching `\d{3,4}` → changed to `\d{2,4}`
+4. **SKU context tracking** - Tickets appear on lines without SKU → track context from previous line
+
+**Results:**
+| Metric | Expected | Actual |
+|--------|----------|--------|
+| BRT 1.PDF bunks | 64 | 64 ✓ |
+| BRT 1.PDF SKUs | 16 | 16 ✓ |
+| Order preserved | Yes | Yes ✓ |
+
+**Files:**
+- `parsers/` - New package with parser architecture
+- `Alcom_Manifest_LabelLive.py` - Added format selector dropdown
+
+---
+
 ### Bug #4: Save Changes Overwrites Dataset with Filtered Results
 
 **Problem:** "Save Changes" button assigned the filtered `edited_lookup` DataFrame directly to `lookup.df`, then saved. If user searched for one SKU and clicked Save, it overwrote the entire 334-row dataset with just the filtered results.
