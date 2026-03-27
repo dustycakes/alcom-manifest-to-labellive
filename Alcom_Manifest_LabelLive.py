@@ -8,6 +8,7 @@ import pandas as pd
 import re
 from io import BytesIO
 from datetime import datetime
+from custom_descriptions import CustomDescriptionLookup
 
 # ============================================================================
 # CONFIGURATION
@@ -25,7 +26,6 @@ st.set_page_config(
 
 def extract_manifest_number(text: str) -> str:
     """Extract manifest number from PDF text content."""
-    # Look for MANIFEST NUMBER header followed by value
     patterns = [
         r'MANIFEST\s*NUMBER\s*\n?\s*([A-Z0-9\-]+)',
         r'Manifest\s*#?\s*[:\-]?\s*([A-Z0-9\-]+)',
@@ -35,87 +35,130 @@ def extract_manifest_number(text: str) -> str:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             return match.group(1).strip()
-    # Fallback: use timestamp
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def smart_shorten_description(desc: str, max_len: int = 40) -> str:
-    """
-    Smart DESCRIPTION shortening for label printing.
-    
-    APEL Extrusions format: "TUBE, 01.000x01.500x.080x99.00 6005A/T5"
-    
-    Strategy:
-    - Keep "TUBE" prefix
-    - Extract key dimensions (outer dimensions and length)
-    - Format like: "TUBE 1.0x1.5x99" or "2X7 @312" style
-    - Remove alloy/temper unless critical
-    
-    TUNE THIS: Adjust max_len and formatting based on label printer constraints
-    """
-    if not desc:
-        return ""
-    
-    # Normalize whitespace
-    desc = ' '.join(desc.split())
-    
-    # Check if it starts with TUBE
-    is_tube = desc.upper().startswith('TUBE')
-    
-    # Extract dimensions pattern: numbers with x between them
-    # Pattern: 01.000x01.500x.080x99.00 or similar
-    dim_match = re.search(r'([\d.]+)x([\d.]+)x([\d.]+)x([\d.]+)', desc)
-    if dim_match:
-        d1, d2, d3, length = dim_match.groups()
-        # Clean up leading zeros: 01.000 -> 1.0
-        d1 = str(float(d1))
-        d2 = str(float(d2))
-        d3 = str(float(d3))
-        length = str(float(length))
-        
-        # Format: TUBE 1.0x1.5x0.08x99 or shortened
-        if is_tube:
-            result = f"TUBE {d1}x{d2}x{d3}x{length}"
-        else:
-            result = f"{d1}x{d2}x{d3}x{length}"
-        
-        if len(result) > max_len:
-            # Ultra-short: just outer dims and length
-            result = f"TUBE {d1}x{d2}@{length}"
-        
-        return result
-    
-    # Fallback: generic shortening
-    # Remove alloy/temper suffix (e.g., "6005A/T5")
-    desc = re.sub(r'\s*6005A/T5\s*', '', desc, flags=re.IGNORECASE)
-    desc = re.sub(r'\s*6063-T5\s*', '', desc, flags=re.IGNORECASE)
-    
-    # Clean up extra spaces
-    desc = ' '.join(desc.split())
-    
-    # Trim to max length
-    if len(desc) > max_len:
-        desc = desc[:max_len-3] + "..."
-    
-    return desc.strip()
+def split_cell_by_newlines(cell: str) -> list[str]:
+    """Split a cell content by newlines, clean up each part."""
+    if not cell:
+        return []
+    return [part.strip() for part in cell.split('\n') if part.strip()]
 
 
-def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, str]:
+def extract_bunks_from_row(sku_cell: str, ticket_cell: str, shipment_cell: str) -> list[dict]:
     """
-    Parse APEL Extrusions manifest PDF using pdfplumber.
+    Extract bunks from a table row - SKU and QTY only.
     
-    Approach:
-    1. Extract items from table structure (SKU, description)
-    2. Extract ticket/qty pairs from text by position
-    3. Distribute tickets to items in order
+    Returns list of {"sku": str, "qty": int, "ticket": str}
+    """
+    bunks = []
+    
+    skus = split_cell_by_newlines(sku_cell)
+    tickets_raw = split_cell_by_newlines(ticket_cell) if ticket_cell else []
+    shipments_raw = split_cell_by_newlines(shipment_cell) if shipment_cell else []
+    
+    # Filter to valid SKUs
+    valid_skus = [s for s in skus if re.match(r'^\d{2}-\d{5}-\d{4}$', s)]
+    
+    # Extract tickets (5-6 digits, not starting with 23)
+    valid_tickets = []
+    for t in tickets_raw:
+        if re.match(r'^\d{5,6}$', t) and not t.startswith('23'):
+            valid_tickets.append(t)
+    
+    # Extract shipments (quantities)
+    valid_shipments = []
+    for s in shipments_raw:
+        s_clean = s.replace(',', '')
+        if re.match(r'^\d+$', s_clean):
+            qty = int(s_clean)
+            if 0 < qty < 500:  # Filter out totals
+                valid_shipments.append(qty)
+    
+    # Group tickets and shipments by item (using totals as delimiters)
+    def extract_groups(values, is_numeric=False):
+        groups = []
+        current = []
+        for val in values:
+            if is_numeric:
+                val_clean = str(val).replace(',', '')
+                if re.match(r'^\d+$', val_clean):
+                    num = int(val_clean)
+                    if num > 500:
+                        if current:
+                            groups.append(current)
+                            current = []
+                    else:
+                        current.append(num)
+            else:
+                if re.match(r'^\d{5,6}$', val) and not val.startswith('23'):
+                    current.append(val)
+                elif re.match(r'^\d+$', val):
+                    if current:
+                        groups.append(current)
+                        current = []
+        if current:
+            groups.append(current)
+        return groups
+    
+    ticket_groups = extract_groups(valid_tickets, is_numeric=False)
+    shipment_groups = extract_groups(valid_shipments, is_numeric=True)
+    
+    # Create bunks
+    for i, sku in enumerate(valid_skus):
+        item_tickets = ticket_groups[i] if i < len(ticket_groups) else []
+        item_shipments = shipment_groups[i] if i < len(shipment_groups) else []
+        
+        for j in range(min(len(item_tickets), len(item_shipments))):
+            bunks.append({
+                "SKU": sku,
+                "QTY_pieces": item_shipments[j],
+                "TICKET": item_tickets[j]
+            })
+    
+    return bunks
 
-    Returns:
-        tuple: (DataFrame with bunks, manifest_number string)
+
+def extract_tickets_from_text(text: str) -> list[tuple[str, int, str]]:
+    """
+    Extract ticket/qty pairs from text (fallback for Apel 2 format).
+    Pattern: 647265 18 428  <- ticket, qty, weight
+    """
+    tickets = []
+    lines = text.split('\n')
+    current_sku = None
+
+    for line in lines:
+        sku_match = re.search(r'(\d{2}-\d{5}-\d{4})', line)
+        if sku_match:
+            current_sku = sku_match.group(1)
+
+        words = line.split()
+        for i, word in enumerate(words):
+            ticket_match = re.match(r'^(64|65)\d{4}$', word)
+            if ticket_match:
+                ticket_num = word
+                if ticket_num.startswith('23'):
+                    continue
+
+                for j in range(i + 1, min(i + 3, len(words))):
+                    qty_word = words[j].replace(',', '')
+                    qty_match = re.match(r'^(\d+)$', qty_word)
+                    if qty_match:
+                        qty_num = int(qty_match.group(1))
+                        if 0 < qty_num < 1000:
+                            tickets.append((ticket_num, qty_num, current_sku))
+                            break
+
+    return tickets
+
+
+def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, list]:
+    """
+    Parse manifest PDF - extract SKU, QTY, and TICKET only.
+    Uses text-based extraction which correctly associates SKUs with tickets.
     """
     all_text = ""
-    bunks = []
-    items = []
-    all_ticket_data = []  # Accumulate across all pages
     debug_info = []
 
     with pdfplumber.open(pdf_file) as pdf:
@@ -124,157 +167,51 @@ def parse_manifest_pdf(pdf_file) -> tuple[pd.DataFrame, str]:
             if text:
                 all_text += text + "\n"
 
-            # Extract tables
-            tables = page.extract_tables()
-            
-            # Find and process the main data table
-            for table in tables:
-                # Find header row
-                header_row = None
-                header_indices = {}
-                
-                for row_idx, row in enumerate(table):
-                    if row and any(cell and 'CUSTOMER PART' in str(cell).upper() for cell in row):
-                        header_row = row_idx
-                        for col_idx, cell in enumerate(row):
-                            if cell:
-                                cell_str = str(cell).strip().upper()
-                                if 'CUSTOMER PART' in cell_str:
-                                    header_indices['sku'] = col_idx
-                                elif 'DESCRIPTION' in cell_str or 'ALLOY' in cell_str:
-                                    header_indices['description'] = col_idx
-                                elif 'ITEM' in cell_str and 'NO' in cell_str:
-                                    header_indices['item'] = col_idx
-                        break
-                
-                if header_row is None:
-                    continue
-                
-                debug_info.append(f"Found header at row {header_row}, indices: {header_indices}")
-                
-                # Parse rows - handle merged cells with multiple items
-                current_sku = None
-                current_desc = None
-                seen_skus = set()
+    # Use text-based extraction as primary method
+    tickets_from_text = extract_tickets_from_text(all_text)
+    debug_info.append(f"Extracted {len(tickets_from_text)} tickets from text")
 
-                for row_idx in range(header_row + 1, len(table)):
-                    row = table[row_idx]
-                    if not row:
-                        continue
+    # Group by SKU
+    tickets_by_sku = {}
+    for ticket, qty, sku_context in tickets_from_text:
+        if sku_context:
+            if sku_context not in tickets_by_sku:
+                tickets_by_sku[sku_context] = []
+            tickets_by_sku[sku_context].append((ticket, qty))
 
-                    row_clean = [str(c).strip() if c else "" for c in row]
+    # Create bunks
+    bunks = []
+    for sku, ticket_qtys in tickets_by_sku.items():
+        for ticket, qty in ticket_qtys:
+            bunks.append({
+                "SKU": sku,
+                "QTY_pieces": qty,
+                "TICKET": ticket
+            })
 
-                    # Get all SKUs from the cell (may contain multiple)
-                    sku_cell = ""
-                    if 'sku' in header_indices and header_indices['sku'] < len(row_clean):
-                        sku_cell = row_clean[header_indices['sku']]
-                    
-                    # Get all descriptions from the cell (may contain multiple)
-                    desc_cell = ""
-                    if 'description' in header_indices and header_indices['description'] < len(row_clean):
-                        desc_cell = row_clean[header_indices['description']]
+    debug_info.append(f"Total bunks: {len(bunks)}")
+    debug_info.append(f"Unique SKUs: {len(tickets_by_sku)}")
 
-                    # Extract individual SKU/description pairs from merged cells
-                    # Find all SKUs
-                    sku_matches = list(re.finditer(r'(\d{2}-\d{5}-\d{4})', sku_cell))
-                    
-                    # Find all descriptions (TUBE, ANGLE, FLAT BAR, etc. with dimensions)
-                    desc_pattern = r'((?:TUBE|ANGLE|FLAT BAR|CHANNEL|ZEE|I BEAM)[,\s\n]*[\d\.\sxX]+)'
-                    desc_matches = list(re.finditer(desc_pattern, desc_cell, re.IGNORECASE))
-                    
-                    # Match SKUs to descriptions by position
-                    for i, sku_match in enumerate(sku_matches):
-                        sku = sku_match.group(1)
-                        if sku not in seen_skus:
-                            # Get corresponding description (same index or nearest)
-                            desc = ""
-                            if i < len(desc_matches):
-                                desc = desc_matches[i].group(1).strip()
-                            elif desc_matches:
-                                desc = desc_matches[-1].group(1).strip()
-                            
-                            items.append({"sku": sku, "desc": desc})
-                            seen_skus.add(sku)
-                            debug_info.append(f"Found item: {sku} - {desc[:30]}")
-            
-            # Extract ticket/qty pairs from text
-            words = page.extract_words()
-            page_width = page.width
-            ticket_column_x = page_width * 0.7
-            
-            lines = {}
-            for word in words:
-                y_key = round(word['top'])
-                if y_key not in lines:
-                    lines[y_key] = []
-                lines[y_key].append(word)
-            
-            page_ticket_data = []
-            for y_pos, line_words in sorted(lines.items()):
-                line_words.sort(key=lambda w: w['x0'])
-                for i, word in enumerate(line_words):
-                    if word['x0'] < ticket_column_x:
-                        continue
-                    text_word = word['text'].strip()
-                    ticket_match = re.match(r'^(\d{5,6})$', text_word)
-                    if ticket_match:
-                        ticket_num = ticket_match.group(1)
-                        if ticket_num.startswith('23'):
-                            continue
-                        for j in range(i + 1, min(i + 4, len(line_words))):
-                            qty_word = lines[y_pos][j]['text'].strip()
-                            qty_match = re.match(r'^(\d+)$', qty_word)
-                            if qty_match:
-                                qty_num = int(qty_match.group(1))
-                                if 0 < qty_num < 10000:
-                                    page_ticket_data.append((ticket_num, qty_num))
-                                    debug_info.append(f"Found ticket: {ticket_num}, qty: {qty_num}")
-                                    break
-            
-            all_ticket_data.extend(page_ticket_data)
-            debug_info.append(f"Page tickets: {len(page_ticket_data)}, Total so far: {len(all_ticket_data)}")
-    
-    debug_info.append(f"Total items: {len(items)}")
-    debug_info.append(f"Items: {items}")
-    debug_info.append(f"Total tickets: {len(all_ticket_data)}")
-    
-    # Distribute tickets to items
-    if all_ticket_data and items:
-        tickets_per_item = len(all_ticket_data) // len(items)
-        remainder = len(all_ticket_data) % len(items)
-        
-        ticket_idx = 0
-        for item_idx, item in enumerate(items):
-            count = tickets_per_item + (1 if item_idx < remainder else 0)
-            debug_info.append(f"Item {item['sku']} gets {count} tickets")
-            for _ in range(count):
-                if ticket_idx < len(all_ticket_data):
-                    ticket_num, qty_num = all_ticket_data[ticket_idx]
-                    bunks.append({
-                        "SKU": item["sku"],
-                        "DESCRIPTION": smart_shorten_description(item["desc"]),
-                        "QTY_pieces": qty_num,
-                        "TICKET": ticket_num,
-                        "Labels_to_Print": 2
-                    })
-                    ticket_idx += 1
-    
-    manifest_number = extract_manifest_number(all_text)
-    st.session_state.debug_info = debug_info
-    
     df = pd.DataFrame(bunks)
-    return df, manifest_number
+    return df, debug_info
 
 
-def create_excel_output(df: pd.DataFrame, manifest_number: str) -> BytesIO:
-    """
-    Create Excel file for Label LIVE with exact headers.
-    Output: 1 row per bunk, columns: SKU, DESCRIPTION, QTY
-    """
+def create_excel_output(df: pd.DataFrame, manifest_number: str, lookup: CustomDescriptionLookup) -> BytesIO:
+    """Create Excel file with custom descriptions from lookup table."""
     output = BytesIO()
     
-    # Select and rename columns for output
-    export_df = df[["SKU", "DESCRIPTION", "QTY_pieces"]].copy()
+    # Add custom descriptions from lookup table
+    export_df = df[["SKU", "QTY_pieces"]].copy()
+    export_df.insert(1, "DESCRIPTION", "")
+    
+    for idx, row in export_df.iterrows():
+        custom_desc = lookup.get_custom_description(row["SKU"])
+        if custom_desc:
+            export_df.at[idx, "DESCRIPTION"] = custom_desc
+        else:
+            # Fallback: use SKU as description if not in lookup
+            export_df.at[idx, "DESCRIPTION"] = f"SKU: {row['SKU']}"
+    
     export_df.columns = ["SKU", "DESCRIPTION", "QTY"]
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -297,6 +234,9 @@ if 'processed' not in st.session_state:
 if 'debug_info' not in st.session_state:
     st.session_state.debug_info = []
 
+# Initialize custom description lookup
+if 'description_lookup' not in st.session_state:
+    st.session_state.description_lookup = CustomDescriptionLookup()
 
 # ============================================================================
 # MAIN UI
@@ -305,183 +245,241 @@ if 'debug_info' not in st.session_state:
 st.title("Alcom Bonner MT – Manifest → Label LIVE")
 st.markdown("---")
 
-# Sidebar controls
-with st.sidebar:
-    st.header("Settings")
+# Create tabs
+tab1, tab2 = st.tabs(["📦 Manifest Processing", "📝 Custom Descriptions"])
+
+with tab1:
+    st.header("Process Manifest PDF")
     
-    default_labels = st.number_input(
-        "Default Labels per Bunk",
-        min_value=1,
-        value=2,
-        step=1,
-        help="Default number of labels to print per bunk"
+    # Sidebar controls
+    with st.sidebar:
+        st.header("Settings")
+        
+        default_labels = st.number_input(
+            "Default Labels per Bunk",
+            min_value=1,
+            value=2,
+            step=1
+        )
+        
+        if st.button("Apply to All", use_container_width=True):
+            if not st.session_state.manifest_df.empty:
+                st.session_state.manifest_df["Labels_to_Print"] = default_labels
+                st.rerun()
+        
+        st.divider()
+        st.markdown("### Instructions")
+        st.markdown("""
+        1. Upload APEL Extrusions manifest PDF
+        2. Review extracted SKUs and quantities
+        3. Edit descriptions if needed
+        4. Download Excel for Label LIVE
+        """)
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Upload APEL Extrusions Manifest PDF",
+        type=['pdf'],
+        help="Upload the manifest PDF from APEL Extrusions"
     )
     
-    if st.button("Apply to All", use_container_width=True):
-        if not st.session_state.manifest_df.empty:
-            st.session_state.manifest_df["Labels_to_Print"] = default_labels
-            st.rerun()
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        process_btn = st.button("Process Manifest", type="primary", use_container_width=True)
+    with col2:
+        if st.session_state.processed:
+            if st.button("Clear & Start New", use_container_width=True):
+                st.session_state.manifest_df = pd.DataFrame()
+                st.session_state.manifest_number = ""
+                st.session_state.processed = False
+                st.rerun()
     
-    st.info("📝 **Note:** Labels_to_Print is for planning only. Final Excel = 1 row per bunk.")
+    # Process manifest
+    if process_btn and uploaded_file:
+        try:
+            df, debug_info = parse_manifest_pdf(uploaded_file)
+            
+            if not df.empty:
+                df["Labels_to_Print"] = default_labels
+                st.session_state.manifest_df = df
+                st.session_state.manifest_number = extract_manifest_number(uploaded_file.read().decode('latin-1', errors='ignore'))
+                st.session_state.processed = True
+                st.session_state.debug_info = debug_info
+                st.rerun()
+            else:
+                st.warning("No data extracted from PDF. Please check the file format.")
+        except Exception as e:
+            st.error(f"Error processing PDF: {str(e)}")
+    
+    # Display results
+    if st.session_state.processed and not st.session_state.manifest_df.empty:
+        lookup = st.session_state.description_lookup
+        
+        # Metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            total_labels = int(st.session_state.manifest_df["Labels_to_Print"].sum())
+            st.metric("🏷️ Total Labels", total_labels)
+        with col2:
+            total_bunks = len(st.session_state.manifest_df)
+            st.metric("📦 Total Bunks", total_bunks)
+        with col3:
+            total_pieces = int(st.session_state.manifest_df["QTY_pieces"].sum())
+            st.metric("🔧 Total Pieces", total_pieces)
+        
+        st.markdown("---")
+        
+        # Show data with custom descriptions
+        st.subheader("Manifest Data")
+        
+        display_df = st.session_state.manifest_df.copy()
+        
+        # Add custom descriptions
+        display_df["CUSTOM_DESC"] = display_df["SKU"].apply(
+            lambda sku: lookup.get_custom_description(sku) or f"SKU: {sku}"
+        )
+        
+        # Show editable table
+        edit_df = st.data_editor(
+            display_df[["SKU", "CUSTOM_DESC", "QTY_pieces", "Labels_to_Print"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "SKU": st.column_config.TextColumn("SKU", width="medium"),
+                "CUSTOM_DESC": st.column_config.TextColumn("Description", width="large",
+                    help="From lookup table - edit directly or update in Custom Descriptions tab"),
+                "QTY_pieces": st.column_config.NumberColumn("QTY", min_value=0, width="small"),
+                "Labels_to_Print": st.column_config.NumberColumn("Labels", min_value=1, width="small"),
+            }
+        )
+        
+        # Update session state
+        st.session_state.manifest_df["Labels_to_Print"] = edit_df["Labels_to_Print"]
+        st.session_state.manifest_df["QTY_pieces"] = edit_df["QTY_pieces"]
+        for idx, row in edit_df.iterrows():
+            if idx < len(st.session_state.manifest_df):
+                # Store custom description override
+                pass
+        
+        st.divider()
+        
+        # Export
+        st.subheader("📥 Export")
+        
+        # Use edited data for export
+        export_df = st.session_state.manifest_df.copy()
+        export_df["DESCRIPTION"] = edit_df["CUSTOM_DESC"]
+        
+        excel_data = create_excel_output(export_df, st.session_state.manifest_number, lookup)
+        filename = f"LabelLIVE_{st.session_state.manifest_number}.xlsx"
+        
+        st.download_button(
+            label="Download Excel for Label LIVE",
+            data=excel_data,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary"
+        )
+        
+        # Debug info
+        if st.session_state.debug_info:
+            with st.expander("🔍 Debug Info"):
+                for line in st.session_state.debug_info:
+                    st.text(line)
+    
+    elif uploaded_file and not st.session_state.processed:
+        st.info("Click 'Process Manifest' to extract data.")
+
+with tab2:
+    st.header("Custom Description Lookup Table")
+    st.markdown("""
+    Manage SKU to custom description mappings. These descriptions will be used 
+    when generating Label LIVE Excel files.
+    """)
+    
+    lookup = st.session_state.description_lookup
+    
+    # Upload/refresh lookup table
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        uploaded_lookup = st.file_uploader(
+            "Upload updated lookup table (optional)",
+            type=['xlsx', 'xls'],
+            key="lookup_uploader"
+        )
+    with col2:
+        if uploaded_lookup:
+            try:
+                new_df = pd.read_excel(uploaded_lookup)
+                new_df.columns = [col.strip().upper() for col in new_df.columns]
+                lookup.df = new_df
+                st.success("Lookup table updated!")
+            except Exception as e:
+                st.error(f"Error loading file: {e}")
     
     st.divider()
-    st.markdown("### Instructions")
-    st.markdown("""
-    1. Upload APEL Extrusions manifest PDF
-    2. Review and edit parsed data
-    3. Adjust Labels_to_Print as needed
-    4. Download Excel for Label LIVE
-    """)
-
-# File uploader
-uploaded_file = st.file_uploader(
-    "Upload APEL Extrusions Manifest PDF",
-    type=['pdf'],
-    help="Upload the manifest PDF from APEL Extrusions"
-)
-
-col1, col2 = st.columns([1, 4])
-with col1:
-    process_btn = st.button("Process Manifest", type="primary", use_container_width=True)
-with col2:
-    if st.session_state.processed:
-        if st.button("Clear & Start New", use_container_width=True):
-            st.session_state.manifest_df = pd.DataFrame()
-            st.session_state.manifest_number = ""
-            st.session_state.processed = False
-            st.rerun()
-
-# Progress bar placeholder
-progress_bar = st.progress(0)
-
-# Process manifest
-if process_btn and uploaded_file:
-    progress_bar.progress(25, text="Reading PDF...")
-
-    try:
-        df, manifest_num = parse_manifest_pdf(uploaded_file)
-        progress_bar.progress(75, text="Creating data table...")
-
-        if not df.empty:
-            # Apply default labels
-            df["Labels_to_Print"] = default_labels
-            st.session_state.manifest_df = df
-            st.session_state.manifest_number = manifest_num
-            st.session_state.processed = True
-            progress_bar.progress(100, text="Complete!")
-            st.rerun()
-        else:
-            st.warning("No data extracted from PDF. Please check the file format.")
-            # Show debug info even on failure
-            if st.session_state.get('debug_info'):
-                with st.expander("🔍 Debug Info"):
-                    for line in st.session_state.debug_info:
-                        st.text(line)
-    except Exception as e:
-        st.error(f"Error processing PDF: {str(e)}")
-    finally:
-        progress_bar.empty()
-
-# Display data editor and export
-if st.session_state.processed and not st.session_state.manifest_df.empty:
-    st.markdown("---")
-
-    # Metrics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        total_labels = int(st.session_state.manifest_df["Labels_to_Print"].sum())
-        st.metric("🏷️ Total Labels to Print", total_labels)
-    with col2:
-        total_bunks = len(st.session_state.manifest_df)
-        st.metric("📦 Total Bunks", total_bunks)
-    with col3:
-        total_pieces = int(st.session_state.manifest_df["QTY_pieces"].sum())
-        st.metric("🔧 Total Pieces", total_pieces)
-
-    st.markdown("---")
-
-    # Data editor
-    st.subheader("Edit Manifest Data")
-
-    # Define column order - exclude TICKET from display (internal tracking only)
-    display_cols = ["SKU", "DESCRIPTION", "QTY_pieces", "Labels_to_Print"]
-    available_cols = [c for c in display_cols if c in st.session_state.manifest_df.columns]
-
-    edited_df = st.data_editor(
-        st.session_state.manifest_df,
+    
+    # Search/filter
+    search_query = st.text_input("🔍 Search SKUs or descriptions", placeholder="Enter SKU or description...")
+    
+    if search_query:
+        filtered_df = lookup.search(search_query)
+    else:
+        filtered_df = lookup.get_all_descriptions()
+    
+    # Show missing descriptions
+    missing_count = len(lookup.get_missing_custom_descriptions())
+    if missing_count > 0:
+        st.warning(f"⚠️ {missing_count} SKUs missing custom descriptions")
+    
+    # Display editable table
+    st.subheader(f"Descriptions ({len(filtered_df)} shown)")
+    
+    edited_lookup = st.data_editor(
+        filtered_df,
         use_container_width=True,
         hide_index=True,
-        column_order=available_cols,
+        num_rows="dynamic",
         column_config={
-            "SKU": st.column_config.TextColumn("SKU", help="Customer Part Number", width="medium"),
-            "DESCRIPTION": st.column_config.TextColumn("DESCRIPTION", help="Product description (editable)", width="large"),
-            "QTY_pieces": st.column_config.NumberColumn("QTY_pieces", help="Quantity in pieces", min_value=0, width="small"),
-            "Labels_to_Print": st.column_config.NumberColumn("Labels_to_Print", help="Number of labels to print", min_value=1, width="small"),
-        },
-        num_rows="dynamic"
+            "GENIUS #": st.column_config.TextColumn("SKU (GENIUS #)", width="medium"),
+            "CUSTOM DESCRIPTION": st.column_config.TextColumn("Custom Description", width="large"),
+            "DESCRIPTION": st.column_config.TextColumn("Original Description", width="large"),
+        }
     )
-
-    # Update session state with edits
-    st.session_state.manifest_df = edited_df
-
-    # Recalculate total
-    total_labels = int(edited_df["Labels_to_Print"].sum())
-
+    
+    # Save changes
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("💾 Save Changes", type="primary", use_container_width=True):
+            lookup.df = edited_lookup
+            lookup.save()
+            st.success("Saved!")
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Reload from File", use_container_width=True):
+            lookup._load()
+            st.session_state.description_lookup = lookup
+            st.rerun()
+    
+    # Add new entry
     st.divider()
-
-    # Export section
-    st.subheader("📥 Export")
-
-    excel_data = create_excel_output(edited_df, st.session_state.manifest_number)
-    filename = f"LabelLIVE_manifest_{st.session_state.manifest_number}.xlsx"
-
-    st.download_button(
-        label="Download Excel for Label LIVE",
-        data=excel_data,
-        file_name=filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        type="primary"
-    )
-
-    st.caption(f"Filename: `{filename}`")
-    st.caption("✅ Excel contains exactly 3 columns: SKU, DESCRIPTION, QTY (1 row per bunk)")
-
-    # Debug info section
-    if st.session_state.debug_info:
-        st.divider()
-        with st.expander("🔍 Debug Info", expanded=False):
-            for line in st.session_state.debug_info:
-                st.text(line)
-
-elif uploaded_file and not st.session_state.processed:
-    st.info("Click 'Process Manifest' to extract bunk data from the PDF.")
-
-# ============================================================================
-# PHASE 2 – Direct Label LIVE API
-# ============================================================================
-# TODO: Implement direct API integration with Label LIVE system
-# 
-# Future enhancements:
-# - POST directly to Label LIVE API endpoint
-# - Receive print job confirmation
-# - Track print history
-# - Webhook for print completion status
-#
-# Example API call structure:
-# ```python
-# import requests
-# 
-# def send_to_label_live(df: pd.DataFrame):
-#     payload = {
-#         "labels": df[["SKU", "DESCRIPTION", "QTY"]].to_dict(orient="records"),
-#         "copies_per_label": df["Labels_to_Print"].iloc[0] if len(df) > 0 else 1
-#     }
-#     response = requests.post(
-#         "https://label-live.alcom.com/api/v1/print",
-#         json=payload,
-#         headers={"Authorization": f"Bearer {API_KEY}"}
-#     )
-#     return response.json()
-# ```
-# ============================================================================
+    st.subheader("Add New Entry")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        new_sku = st.text_input("SKU (GENIUS #)", key="new_sku")
+    with col2:
+        new_custom_desc = st.text_input("Custom Description", key="new_custom_desc")
+    with col3:
+        new_orig_desc = st.text_input("Original Description", key="new_orig_desc")
+    
+    if st.button("Add Entry"):
+        if new_sku and new_custom_desc:
+            lookup.add_or_update(new_sku, new_custom_desc, new_orig_desc)
+            lookup.save()
+            st.success(f"Added/updated {new_sku}")
+            st.rerun()
+        else:
+            st.error("SKU and Custom Description are required")

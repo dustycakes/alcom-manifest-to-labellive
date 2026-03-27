@@ -1,0 +1,60 @@
+Total Bunks: 42
+Unique SKUs: 14
+
+By SKU:
+  70-02076-0950 | No custom desc | 3 tickets
+    Ticket: 647301, QTY: 285
+    Ticket: 647339, QTY: 285
+    Ticket: 647340, QTY: 138
+  70-02188-0950 | No custom desc | 3 tickets
+    Ticket: 647252, QTY: 190
+    Ticket: 647846, QTY: 228
+    Ticket: 647847, QTY: 228
+  70-11127-1020 | 2X2@102 | 4 tickets
+    Ticket: 647251, QTY: 70
+    Ticket: 647253, QTY: 70
+    Ticket: 647254, QTY: 70
+    Ticket: 647827, QTY: 53
+  70-11160-0990 | .090 WALL@99 | 5 tickets
+    Ticket: 647788, QTY: 252
+    Ticket: 647789, QTY: 252
+    Ticket: 647790, QTY: 252
+    Ticket: 647791, QTY: 252
+    Ticket: 647792, QTY: 39
+  70-11163-0760 | 2X3@76 | 2 tickets
+    Ticket: 647807, QTY: 63
+    Ticket: 647808, QTY: 63
+  70-11163-1020 | 2X3@102 | 2 tickets
+    Ticket: 647809, QTY: 63
+    Ticket: 647810, QTY: 36
+  70-11167-1020 | 2X4@102 | 2 tickets
+    Ticket: 647820, QTY: 40
+    Ticket: 647821, QTY: 42
+  70-11169-1150 | 2X5@115 | 2 tickets
+    Ticket: 647813, QTY: 24
+    Ticket: 647814, QTY: 29
+  70-11217-0974 | SPORTSDECK SLIDING LEG@97.5 | 3 tickets
+    Ticket: 647824, QTY: 50
+    Ticket: 647825, QTY: 50
+    Ticket: 647826, QTY: 38
+  70-11243-0870 | .060 WALL@87 | 5 tickets
+    Ticket: 647793, QTY: 252
+    Ticket: 647794, QTY: 252
+    Ticket: 647795, QTY: 252
+    Ticket: 647796, QTY: 252
+    Ticket: 647797, QTY: 224
+  70-11243-0990 | .060 WALL@99 | 2 tickets
+    Ticket: 647557, QTY: 252
+    Ticket: 647559, QTY: 272
+  70-11243-2640 | .060 WALL@264 | 3 tickets
+    Ticket: 647532, QTY: 116
+    Ticket: 647533, QTY: 252
+    Ticket: 647558, QTY: 213
+  70-12164-0680 | I-BEAM@68 | 3 tickets
+    Ticket: 647798, QTY: 96
+    Ticket: 647799, QTY: 96
+    Ticket: 647800, QTY: 71
+  70-12164-0760 | I-BEAM@76 | 3 tickets
+    Ticket: 647801, QTY: 96
+    Ticket: 647802, QTY: 96
+    Ticket: 647803, QTY: 69
