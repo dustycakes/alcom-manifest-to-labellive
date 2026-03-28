@@ -25,6 +25,20 @@ st.set_page_config(
 # HELPER FUNCTIONS
 # ============================================================================
 
+def render_header():
+    """Render header with icons and larger text - minimal custom CSS."""
+    st.markdown("""
+    <div style="text-align: center; margin-bottom: 1rem;">
+        <p style="font-size: 2.5rem; font-weight: 700; margin: 0;">
+            Alcom Bonner MT
+        </p>
+        <p style="font-size: 2rem; margin: 0.5rem 0;">
+            📦 <strong>Manifest</strong> → <strong style="color: #2e7d32;">Label LIVE ✓</strong>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def extract_manifest_number(text: str) -> str:
     """Extract manifest number from PDF text content."""
     patterns = [
@@ -220,8 +234,7 @@ if 'description_lookup' not in st.session_state:
 # MAIN UI
 # ============================================================================
 
-st.title("Alcom Bonner MT – Manifest → Label LIVE")
-st.markdown("---")
+render_header()
 
 # Create tabs
 tab1, tab2 = st.tabs(["📦 Manifest Processing", "📝 Custom Descriptions"])
@@ -255,13 +268,6 @@ with tab1:
         5. Download Excel for Label LIVE
         """)
 
-    # File uploader
-    uploaded_file = st.file_uploader(
-        "Upload",
-        type=['pdf'],
-        help="Upload the manifest and hit Process Manifest"
-    )
-
     # Manifest format selector
     format_options = {name: PARSERS[name]().format_name for name in get_available_formats()}
     selected_format = st.selectbox(
@@ -269,6 +275,13 @@ with tab1:
         options=list(format_options.keys()),
         format_func=lambda x: format_options[x],
         help="Select the manifest supplier format"
+    )
+
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Upload",
+        type=['pdf'],
+        help="Upload the manifest and hit Process Manifest"
     )
 
     col1, col2 = st.columns([1, 4])
@@ -314,7 +327,7 @@ with tab1:
             st.metric("📦 Total Bunks", total_bunks)
         with col3:
             total_pieces = int(st.session_state.manifest_df["QTY_pieces"].sum())
-            st.metric("🔧 Total Pieces", total_pieces)
+            st.metric("📋 Total Pieces", total_pieces)
         
         st.markdown("---")
         
@@ -370,15 +383,7 @@ with tab1:
             use_container_width=True,
             type="primary"
         )
-        
-        # Debug info
-        if st.session_state.debug_info:
-            with st.expander("🔍 Debug Info"):
-                if hasattr(st.session_state, 'selected_format'):
-                    st.text(f"Parser: {st.session_state.selected_format}")
-                for line in st.session_state.debug_info:
-                    st.text(line)
-    
+
     elif uploaded_file and not st.session_state.processed:
         st.info("Click 'Process Manifest' to extract data.")
 
