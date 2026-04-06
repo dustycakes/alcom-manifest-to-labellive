@@ -1,3 +1,24 @@
+## Project Pivot — 2026-04-06
+
+**Pivot:** Direct printing from Streamlit to Zebra ZD421, bypassing Label LIVE software entirely.
+
+**New Architecture:**
+```
+PDF Manifest → Streamlit App → Python ZPL Engine → Zebra ZD421 (direct)
+                              ↑
+              Zebra Designer for Dev (template gen)
+```
+
+**Key Decisions:**
+- Zebra Designer for Developers generates label templates (.prn/.zpl)
+- Python handles variable substitution and raw ZPL transmission
+- Existing template at `Zebra-Templates/extrusion-label-template.prn` is the starting point
+- Three ZPL variables mapped: VARSKU, VARQTY, VARMATERIALNAME
+
+**Why:** Eliminates the Excel download → Label LIVE software → print chain. One-click from manifest parse to physical label.
+
+---
+
 ## Workflow Orchestration
 ### 1. Plan Mode Default
 - Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
@@ -35,12 +56,12 @@ with the pattern
 - Zero context switching required from the user
 - Go fix failing CI tests without being told how
 ## Task Management
-1. **Plan First**: Write plan to 'tasks/todo.md' with checkable items
+1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to 'tasks/todo.md*
-6. **Capture Lessons**: Update 'tasks/lessons.md after corrections
+5. **Document Results**: Add review section to `tasks/todo.md`
+6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
 ## Core Principles
 - **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 - **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.

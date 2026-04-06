@@ -39,7 +39,15 @@
       "Bash(cleaned *)",
       "Bash(c)",
       "Bash(c *)",
-      "Bash(text *)"
+      "Bash(text *)",
+      "Bash(\"manifests/brt 1.pdf\")",
+      "Bash(patterns *)",
+      "Bash(r'manifest\\s*number.*?(\\d+)',)",
+      "Bash(r'manifest\\s*number\\s*\\n?\\s*(\\d+)',)",
+      "Bash(r'(\\d{6})\\s+3/27/2026',)",
+      "Bash(])",
+      "Bash(m *)",
+      "Bash(re.dotall)"
     ]
   },
   "$version": 3

@@ -1,5 +1,36 @@
 # Lessons Learned - Alcom Manifest to Label LIVE
 
+## Date: 2026-03-28
+
+### UI Enhancements - Header and Form Layout
+
+**Goal:** Improve visual hierarchy and user flow with minimal custom CSS.
+
+**Changes:**
+1. **Header redesign** - Replaced `st.title()` + separator with custom banner:
+   - Large text (2.5rem title, 2rem flow) using inline styles only
+   - Package icon (📦) represents materials being processed
+   - Visual flow: "Manifest → Label LIVE ✓" with green accent
+   - ~40 lines of CSS → ~6 lines of inline styles
+
+2. **Form reordering** - Moved "Manifest Format" selector above "Upload":
+   - Logical flow: select format first, then upload matching file
+   - Matches the numbered instructions in sidebar
+
+3. **Icon updates**:
+   - Total Pieces: 🔧 (wrench) → 📋 (clipboard) for inventory/counting context
+   - Header: Removed printer emoji, kept package (📦) for simplicity
+
+4. **Removed debug expander** - Cleaned up UI for production use (debug info still collected in session_state if needed)
+
+**Design Principle:** Use Streamlit's native theming via CSS variables where possible, minimal inline styles only for sizing and accent colors.
+
+**Files:**
+- `Alcom_Manifest_LabelLive.py` - `render_header()` function, form order
+- `plan.md` - Updated with completed tasks
+
+---
+
 ## Date: 2026-03-27
 
 ### Architecture: Multi-Format Parser System
