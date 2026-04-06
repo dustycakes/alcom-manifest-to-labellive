@@ -14,13 +14,22 @@ Existing assets: multi-format parser (Apel, BRT, OCR), 334-SKU description looku
 ## Phase 1: Direct Print Engine
 
 - [x] Scaffold `alcommander-shared/zebra-print/` — ZPLBuilder, TemplateRegistry, PrinterTransport, ZebraPrintService
-- [ ] Integrate shared engine into Manifest-to-LabelLIVE (import, wire ZebraPrintService)
-- [ ] Register `extrusion-label-template.prn` as `bunk_label` template spec in shared engine
-- [ ] Map template fields: SKU (barcode + text), QTY, description — with dynamic scaling constraints
-- [ ] Test template rendering with static data (preview mode)
+- [x] Integrate shared engine into Manifest-to-LabelLIVE (import, wire ZebraPrintService)
+- [x] Register `extrusion-label-template.prn` as `bunk_label` template spec in shared engine
+- [x] Map template fields: SKU (barcode + text), QTY, description — with dynamic scaling constraints
+- [x] Test template rendering with static data (preview mode)
 - [ ] Integrate "Print Labels" button in Streamlit → calls `print_batch()`
 - [ ] Add printer status indicator (`printer_online()`) + preview panel (`preview_label()`)
 - [ ] Progress bar for multi-label jobs
+
+## Tires/Axles Labels Tab (Completed)
+
+- [x] Create `tires_axles_lookup.py` module (49 tires, 96 axles)
+- [x] Add Tab 3: SKU Lookup + Print Cart workflow
+- [x] Multiselect-based SKU picker with tag pills
+- [x] Two-mode UI: Browse (70/30 split) → Edit Cart (full width)
+- [x] Data editor with persistent state, duplicate row helper
+- [x] Bug fixes: schema endpoint 404, auto-save NaN toast, variant param error
 
 ## Phase 2: Template Refinement
 

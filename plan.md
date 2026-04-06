@@ -88,6 +88,16 @@ PDF Manifest → Streamlit (parse + description lookup) → Zebra ZD421 (direct 
 - **Auto-save edited lookup** — no more data loss on filtered saves
 - **Text-based extraction** — more robust than table extraction across formats
 
+## Completed (Tires/Axles Tab — 2026-04-06)
+
+- **Tires/Axles Labels Tab (Tab 3)** — SKU Lookup + Print Cart workflow
+- **Tires/Axles Lookup Module** — 49 tires (60-), 96 axles (65-) from `Tires-Axles.xlsx`
+- **Multiselect SKU Picker** — Built-in search, tag pills, "[Select all]" bulk add
+- **Two-Mode UI** — Browse (70/30 split) → Edit Cart (full width)
+- **Data Editor** — Persistent state, duplicate row helper, sync on every interaction
+- **ZPLBuilder Integration** — Shared engine with template registration, preview mode
+- **Bug Fixes** — Schema endpoint 404, auto-save NaN toast, `variant` param error
+
 ---
 
 ## Future Considerations
