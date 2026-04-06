@@ -9,6 +9,7 @@ import re
 from io import BytesIO
 from datetime import datetime
 from custom_descriptions import CustomDescriptionLookup
+from tires_axles_lookup import TiresAxlesLookup
 from parsers import get_parser, get_available_formats, PARSERS
 
 # ============================================================================
@@ -237,7 +238,7 @@ if 'description_lookup' not in st.session_state:
 render_header()
 
 # Create tabs
-tab1, tab2 = st.tabs(["📦 Manifest Processing", "📝 Custom Descriptions"])
+tab1, tab2, tab3 = st.tabs(["📦 Manifest Processing", "📝 Custom Descriptions", "🏷 Tires/Axles Labels"])
 
 with tab1:
     st.header("Process Manifest PDF")
@@ -508,3 +509,240 @@ with tab2:
                 st.success("Lookup table updated!")
             except Exception as e:
                 st.error(f"Error loading file: {e}")
+
+# ============================================================================
+# TAB 3: TIRES/AXLES LABEL GENERATOR
+# ============================================================================
+
+with tab3:
+    ta_lookup = TiresAxlesLookup("Tires-Axles.xlsx")
+
+    # Initialize session state
+    if "print_cart" not in st.session_state:
+        st.session_state.print_cart = []  # List of {sku, description, qty, labels}
+    if "ta_mode" not in st.session_state:
+        st.session_state.ta_mode = "browse"  # "browse" or "edit"
+
+    # ─── Cart helpers ───
+    def _add_to_cart(sku, description, qty=1, labels=2):
+        cart = st.session_state.print_cart
+        for item in cart:
+            if item["sku"] == sku and item["qty"] == qty:
+                item["labels"] += labels
+                return
+        cart.append({"sku": sku, "description": description, "qty": qty, "labels": labels})
+
+    # ═══════════════════════════════════════════════════════
+    # MODE: EDIT CART (full width)
+    # ═══════════════════════════════════════════════════════
+    if st.session_state.ta_mode == "edit":
+        col_back, _ = st.columns([1, 4])
+        with col_back:
+            if st.button("← Back to Browse"):
+                st.session_state.ta_mode = "browse"
+                st.rerun()
+
+        cart = st.session_state.print_cart
+
+        if not cart:
+            st.info("Cart is empty. Go back to Browse and add SKUs.")
+        else:
+            # Persist editor dataframe in session state to avoid rebuild-on-rerun
+            if "ta_cart_df" not in st.session_state or st.session_state.get("ta_cart_version") != len(cart):
+                st.session_state.ta_cart_df = pd.DataFrame([
+                    {"SKU": item["sku"], "Description": item["description"][:40], "Qty": item["qty"], "Labels": item["labels"]}
+                    for item in cart
+                ])
+                st.session_state.ta_cart_version = len(cart)
+
+            def _sync_cart():
+                """Sync edited dataframe back to print_cart session state."""
+                df = st.session_state.ta_cart_df
+                new_cart = []
+                for _, row in df.iterrows():
+                    new_cart.append({
+                        "sku": str(row["SKU"]),
+                        "description": str(row["Description"]),
+                        "qty": int(row["Qty"]),
+                        "labels": int(row["Labels"]),
+                    })
+                st.session_state.print_cart = new_cart
+                st.session_state.ta_cart_version = len(new_cart)
+
+            edited_cart = st.data_editor(
+                st.session_state.ta_cart_df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                column_config={
+                    "SKU": st.column_config.TextColumn("SKU", width="medium"),
+                    "Description": st.column_config.TextColumn("Description", width="large", disabled=True),
+                    "Qty": st.column_config.NumberColumn("Qty/Pallet", min_value=1, step=1, width="small"),
+                    "Labels": st.column_config.NumberColumn("Labels", min_value=1, step=1, width="small"),
+                },
+                key="ta_cart_editor",
+                on_change=_sync_cart,
+            )
+
+            # Duplicate row helper
+            if len(cart) > 1:
+                col_sel, col_btn = st.columns([4, 1])
+                with col_sel:
+                    st.selectbox(
+                        "Duplicate a row",
+                        options=list(set(item["sku"] for item in cart)),
+                        key="ta_dup_select",
+                        placeholder="Choose SKU to duplicate…"
+                    )
+                with col_btn:
+                    # Spacer to push button down to align with selectbox bottom
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("⧉ Duplicate", use_container_width=True):
+                        selected = st.session_state.get("ta_dup_select")
+                        if selected:
+                            src = next((item for item in cart if item["sku"] == selected), None)
+                            if src:
+                                st.session_state.print_cart.append(src.copy())
+                                st.session_state.ta_cart_df = pd.DataFrame([
+                                    {"SKU": i["sku"], "Description": i["description"][:40], "Qty": i["qty"], "Labels": i["labels"]}
+                                    for i in st.session_state.print_cart
+                                ])
+                                st.session_state.ta_cart_version = len(st.session_state.print_cart)
+                                st.rerun()
+
+            # Summary + Print
+            st.divider()
+            total_labels = sum(item["labels"] for item in cart)
+            total_skus = len(set(item["sku"] for item in cart))
+
+            col_a, col_b, col_c = st.columns([1, 1, 2])
+            with col_a:
+                st.metric("SKUs", total_skus)
+            with col_b:
+                st.metric("Total Labels", total_labels)
+            with col_c:
+                if st.button("🖨 Print All Labels", type="primary", use_container_width=True):
+                    try:
+                        import sys
+                        sys.path.insert(0, "../alcommander-shared/zebra-print")
+                        from engine import ZebraPrintService, TemplateSpec, TemplateField
+
+                        service = ZebraPrintService(
+                            printer_host="127.0.0.1", printer_port=9100,
+                            template_dir="Zebra-Templates",
+                        )
+                        service.register_template(TemplateSpec(
+                            name="bunk_label", version="1.0",
+                            label_width=812, label_height=1218,
+                            fields=[
+                                TemplateField(name="sku", x=514, y=1218, rotation="B",
+                                              min_font_h=80, max_font_h=155, max_width=1212, max_lines=1, alignment="C"),
+                                TemplateField(name="qty", x=733, y=1218, rotation="B",
+                                              min_font_h=100, max_font_h=176, max_width=807, max_lines=1, alignment="R"),
+                                TemplateField(name="description", x=31, y=10, rotation="B",
+                                              min_font_h=60, max_font_h=113, max_width=1196, max_lines=2, alignment="L"),
+                            ],
+                        ))
+
+                        preview_zpl = ""
+                        for item in cart:
+                            preview_zpl += service.preview_label(
+                                {"sku": item["sku"], "qty": str(item["qty"]), "description": item["description"]},
+                                template="bunk_label"
+                            )
+
+                        with st.expander("📄 Preview ZPL", expanded=False):
+                            st.code(preview_zpl, language="text")
+                        st.success(f"✅ Generated ZPL for {total_labels} labels. Connect printer to send.")
+
+                    except ImportError:
+                        st.warning("Shared print engine not available.")
+                    except Exception as e:
+                        st.error(f"Print error: {e}")
+
+            # Clear Cart — right-aligned to match Print button
+            _, _, col_clear = st.columns([1, 1, 2])
+            with col_clear:
+                if st.button("🗑 Clear Cart", use_container_width=True):
+                    st.session_state.print_cart = []
+                    st.session_state.ta_mode = "browse"
+                    st.rerun()
+
+    # ═══════════════════════════════════════════════════════
+    # MODE: BROWSE (default — lookup dominates)
+    # ═══════════════════════════════════════════════════════
+    else:
+        col_left, col_right = st.columns([7, 3])
+
+        with col_left:
+            # SKU Lookup header with category selector inline
+            col_title, col_cat = st.columns([2, 1])
+            with col_title:
+                st.subheader("SKU Lookup")
+            with col_cat:
+                st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
+                category = st.radio(
+                    "Category", ["tires", "axles"],
+                    horizontal=True, label_visibility="collapsed", key="ta_category"
+                )
+
+            cart_skus = {item["sku"] for item in st.session_state.print_cart}
+            all_skus = [str(row["Item"]) for _, row in ta_lookup.get_tires().iterrows()] if category == "tires" else [str(row["Item"]) for _, row in ta_lookup.get_axles().iterrows()]
+            not_in_cart = [sku for sku in all_skus if sku not in cart_skus]
+
+            # Multiselect — primary selection interface with built-in search
+            # Type to filter, click to add as tag pills
+            select_options = ["[Select all]"] + not_in_cart
+
+            selected_skus = st.multiselect(
+                "Search and select SKUs",
+                options=select_options,
+                format_func=lambda s: s if s.startswith("[") else s,
+                key="ta_multiselect",
+                placeholder="Type to search, click to add…"
+            )
+
+            # Determine what to add
+            add_list = []
+            if selected_skus and select_options[0] in selected_skus:
+                add_list = not_in_cart
+            else:
+                add_list = selected_skus
+
+            # Action button — static position, count updates live
+            if add_list:
+                if st.button(f"➕ Add selected ({len(add_list)})", type="primary", use_container_width=True):
+                    for sku in add_list:
+                        desc = ta_lookup.get_description(category, sku)
+                        _add_to_cart(sku, desc)
+                    st.toast(f"Added {len(add_list)} item(s)", icon="🛒")
+                    st.rerun()
+
+        with col_right:
+            # Print Cart header with item count inline, aligned right
+            total_skus = len(set(item["sku"] for item in st.session_state.print_cart))
+            col_h1, col_h2 = st.columns([3, 1])
+            with col_h1:
+                st.subheader("Print Cart")
+            with col_h2:
+                st.markdown(
+                    f"<div style='text-align: right; padding-top: 18px; color: var(--mantine-color-dimmed); font-size: 14px;'>"
+                    f"{total_skus} items</div>",
+                    unsafe_allow_html=True
+                )
+
+            cart = st.session_state.print_cart
+
+            if not cart:
+                st.info("Add SKUs from the lookup panel.")
+            else:
+                # Compact list — SKU and description only
+                for item in cart:
+                    st.markdown(f"**{item['sku']}**")
+                    st.caption(item["description"][:30])
+
+                st.divider()
+
+                if st.button("✏️ Edit Cart", type="primary", use_container_width=True):
+                    st.session_state.ta_mode = "edit"
+                    st.rerun()

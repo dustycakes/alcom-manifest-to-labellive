@@ -1,5 +1,62 @@
 # Lessons Learned - Alcom Manifest to Label LIVE
 
+## Date: 2026-04-06
+
+### Tires/Axles Label Generator — UI Patterns and Streamlit Gotchas
+
+**1. `st.data_editor` state persistence is fragile**
+- **Problem:** Editing cell 1, then hitting Enter in cell 2 wiped cell 1's edit. The editor rebuilt from session state on every rerun, losing in-progress edits.
+- **Solution:** Persist the editor's DataFrame in `st.session_state.ta_cart_df` with a version counter. Only rebuild when cart length changes. Use `on_change` callback to sync edits immediately.
+- **Rule:** Never rebuild `st.data_editor` data from source on every render. Persist in session state with a change detector.
+
+**2. Avoid external UI controls that mutate `st.data_editor` state**
+- **Problem:** "Add Duplicate" button modified the cart list behind the scenes, causing the data_editor to rebuild and wipe user edits. Race conditions between button clicks and editor internal state.
+- **Solution:** Remove external mutation buttons entirely. Let the editor's built-in `+` row addition handle new rows. Make SKU column editable so users can type directly.
+- **Rule:** Don't mix external mutation controls with `st.data_editor`. Let the editor own its data.
+
+**3. `st.button(variant="secondary")` not supported in all Streamlit versions**
+- **Problem:** `TypeError: ButtonMixin.button() got an unexpected keyword argument 'variant'` — this parameter was added in Streamlit 1.42.0.
+- **Solution:** Remove `variant` argument. Use default button styling.
+- **Rule:** Check Streamlit version compatibility before using newer UI parameters.
+
+**4. `st.data_editor` `num_rows="dynamic"` is the native "add row" solution**
+- The `+` button at the bottom of the table adds blank rows. Combined with an editable SKU column, users can add duplicates by typing the same SKU. No custom duplicate button needed.
+
+**5. Two-mode workflow pattern (Browse → Edit)**
+- Default mode: split layout (70/30) with SKU lookup dominating
+- Edit mode: full-width cart editor, lookup hidden
+- Toggle via `st.session_state.ta_mode` with explicit button
+- Clear Cart resets mode to Browse automatically
+- **Rule:** Use session state mode flags for multi-phase workflows. Always provide an explicit "back" button.
+
+**6. Multiselect as primary selection interface**
+- Streamlit's `st.multiselect` has built-in search + tag pills with × buttons
+- Far superior to custom checkbox lists or HTML-rendered rows
+- "[Select all]" as first option for bulk operations
+- **Rule:** Use `st.multiselect` for any multi-item selection workflow. It handles search, tags, and deselection natively.
+
+**7. Auto-save NaN bug in data editor**
+- **Problem:** Empty rows in `st.data_editor` caused "✓ Added nan" toast spam. `str(row['GENIUS #'])` converts NaN to the string "nan".
+- **Solution:** Check `pd.isna(sku_val)` and filter string "nan" before processing.
+- **Rule:** Always validate for NaN before stringifying pandas values.
+
+**8. `/api/inventory.schema` vs `/api/inventory.schema` (slash vs dot)**
+- **Problem:** 404 on schema endpoint. Code called `/api/inventory.schema` but the API expects `/api/inventory/schema`.
+- **Rule:** Always test API endpoints with curl before hardcoding paths.
+
+### ZPLBuilder Shared Engine Integration
+
+**9. Shared library import path**
+- Use `sys.path.insert(0, "../alcommander-shared/zebra-print")` for cross-project imports
+- Import inside function body (not module top) to avoid breaking when path isn't available
+- Wrap in try/except with user-friendly error message
+
+**10. Template registration requires explicit field definitions**
+- ZPLBuilder needs `TemplateField` objects with position, scaling constraints, and rotation
+- Coordinates are in dots at 203 DPI (ZD421)
+- `max_lines > 1` enables `^FB` wrapping
+- **Rule:** Document template specs alongside the .prn file they were derived from.
+
 ## Date: 2026-03-28
 
 ### UI Enhancements - Header and Form Layout
