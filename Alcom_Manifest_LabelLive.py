@@ -428,9 +428,11 @@ with tab2:
     # Auto-save: detect changes and persist to master + file
     # Compare edited_lookup against master to find changes
     for idx, row in edited_lookup.iterrows():
-        sku = str(row['GENIUS #']).strip()
-        if not sku:
+        sku_val = row['GENIUS #']
+        # Skip empty rows, NaN values, and the string "nan" from pandas
+        if pd.isna(sku_val) or not str(sku_val).strip() or str(sku_val).strip() == "nan":
             continue
+        sku = str(sku_val).strip()
         # Find matching row in master dataframe
         mask = lookup.df['GENIUS #'] == sku
         if mask.any():
