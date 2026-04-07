@@ -227,6 +227,12 @@ if 'processed' not in st.session_state:
 if 'debug_info' not in st.session_state:
     st.session_state.debug_info = []
 
+# Printer connection settings (persisted across reruns)
+if 'printer_host' not in st.session_state:
+    st.session_state.printer_host = "127.0.0.1"  # Placeholder until on work network
+if 'printer_port' not in st.session_state:
+    st.session_state.printer_port = 9100
+
 # Initialize custom description lookup
 if 'description_lookup' not in st.session_state:
     st.session_state.description_lookup = CustomDescriptionLookup()
@@ -251,14 +257,34 @@ with tab1:
             "Default Labels per Bunk",
             min_value=1,
             value=2,
-            step=1
+            step=1,
         )
-        
+
         if st.button("Apply to All", use_container_width=True):
             if not st.session_state.manifest_df.empty:
                 st.session_state.manifest_df["Labels_to_Print"] = default_labels
                 st.rerun()
-        
+
+        st.divider()
+        st.markdown("### Printer")
+        printer_host = st.text_input(
+            "Printer IP",
+            value=st.session_state.printer_host,
+            key="_printer_host_input",
+            help="Zebra ZD421 IP address on the network",
+        )
+        printer_port = st.number_input(
+            "Port",
+            min_value=1,
+            max_value=65535,
+            value=st.session_state.printer_port,
+            key="_printer_port_input",
+        )
+        # Persist changes
+        if printer_host != st.session_state.printer_host or printer_port != st.session_state.printer_port:
+            st.session_state.printer_host = printer_host
+            st.session_state.printer_port = printer_port
+
         st.divider()
         st.markdown("### Instructions")
         st.markdown("""
@@ -365,25 +391,94 @@ with tab1:
                 pass
         
         st.divider()
-        
-        # Export
-        st.subheader("📥 Export")
-        
+
+        # Export / Print
+        st.subheader("📥 Export / 🖨 Print")
+
         # Use edited data for export
         export_df = st.session_state.manifest_df.copy()
         export_df["DESCRIPTION"] = edit_df["CUSTOM_DESC"]
-        
-        excel_data = create_excel_output(export_df, st.session_state.manifest_number, lookup)
-        filename = f"LabelLIVE_{st.session_state.manifest_number}.xlsx"
-        
-        st.download_button(
-            label="Download Excel for Label LIVE",
-            data=excel_data,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary"
-        )
+
+        col_excel, col_print = st.columns([1, 1])
+
+        with col_excel:
+            excel_data = create_excel_output(export_df, st.session_state.manifest_number, lookup)
+            filename = f"LabelLIVE_{st.session_state.manifest_number}.xlsx"
+
+            st.download_button(
+                label="📥 Download Excel for Label LIVE",
+                data=excel_data,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+        with col_print:
+            if st.button("🖨 Print Labels Direct", type="primary", use_container_width=True):
+                try:
+                    import sys
+                    sys.path.insert(0, "../alcommander-shared/zebra-print")
+                    from engine import ZebraPrintService
+
+                    service = ZebraPrintService(
+                        printer_host=st.session_state.printer_host,
+                        printer_port=st.session_state.printer_port,
+                        template_dir="../alcommander-shared/zebra-print/templates",
+                    )
+
+                    # Build label data from edited manifest data
+                    items = []
+                    for _, row in edit_df.iterrows():
+                        sku = str(row["SKU"]).strip()
+                        desc = str(row["CUSTOM_DESC"]).strip()
+                        qty = int(row["QTY_pieces"])
+                        labels = int(row.get("Labels_to_Print", 1))
+                        for _ in range(labels):
+                            items.append({"sku": sku, "qty": str(qty), "description": desc})
+
+                    if not items:
+                        st.warning("No bunks to print.")
+                    else:
+                        # Check printer status first
+                        if not service.printer_online():
+                            st.error(f"⚠️ Printer offline at {st.session_state.printer_host}:{st.session_state.printer_port}. ZPL generated but not sent.")
+                            # Still generate preview
+                            zpl_preview = ""
+                            for item in items[:3]:  # Preview first 3
+                                zpl_preview += service.preview_label(item, "bunk_label")
+                            with st.expander("📄 Preview ZPL (first 3 labels)", expanded=True):
+                                st.code(zpl_preview, language="text")
+                            st.info(f"ZPL ready for {len(items)} labels. Connect to printer network and try again.")
+                        else:
+                            # Show progress
+                            progress = st.progress(0, text="Sending labels to printer...")
+                            zpl_full = ""
+                            batch_size = 10
+                            total_sent = 0
+                            for i in range(0, len(items), batch_size):
+                                batch = items[i:i + batch_size]
+                                for item in batch:
+                                    zpl_full += service.builder.build_label(item, "bunk_label")
+                                total_sent += len(batch)
+                                progress.progress(total_sent / len(items), text=f"Sent {total_sent}/{len(items)} labels")
+
+                            result = service.transport.send(zpl_full)
+                            progress.empty()
+
+                            if result.success:
+                                st.success(f"✅ Sent {len(items)} labels to {st.session_state.printer_host}:{st.session_state.printer_port}")
+                            else:
+                                st.error(f"❌ {result.message}")
+                                with st.expander("📄 Preview ZPL (first 3 labels)", expanded=True):
+                                    zpl_preview = ""
+                                    for item in items[:3]:
+                                        zpl_preview += service.preview_label(item, "bunk_label")
+                                    st.code(zpl_preview, language="text")
+
+                except ImportError:
+                    st.warning("Shared print engine not available.")
+                except Exception as e:
+                    st.error(f"Print error: {e}")
 
     elif uploaded_file and not st.session_state.processed:
         st.info("Click 'Process Manifest' to extract data.")
@@ -628,21 +723,10 @@ with tab3:
                         from engine import ZebraPrintService, TemplateSpec, TemplateField
 
                         service = ZebraPrintService(
-                            printer_host="127.0.0.1", printer_port=9100,
-                            template_dir="Zebra-Templates",
+                            printer_host=st.session_state.printer_host,
+                            printer_port=st.session_state.printer_port,
+                            template_dir="../alcommander-shared/zebra-print/templates",
                         )
-                        service.register_template(TemplateSpec(
-                            name="bunk_label", version="1.0",
-                            label_width=812, label_height=1218,
-                            fields=[
-                                TemplateField(name="sku", x=514, y=1218, rotation="B",
-                                              min_font_h=80, max_font_h=155, max_width=1212, max_lines=1, alignment="C"),
-                                TemplateField(name="qty", x=733, y=1218, rotation="B",
-                                              min_font_h=100, max_font_h=176, max_width=807, max_lines=1, alignment="R"),
-                                TemplateField(name="description", x=31, y=10, rotation="B",
-                                              min_font_h=60, max_font_h=113, max_width=1196, max_lines=2, alignment="L"),
-                            ],
-                        ))
 
                         preview_zpl = ""
                         for item in cart:
@@ -719,7 +803,7 @@ with tab3:
                     st.rerun()
 
         with col_right:
-            # Print Cart header with item count inline, aligned right
+            # Print Cart panel
             total_skus = len(set(item["sku"] for item in st.session_state.print_cart))
             col_h1, col_h2 = st.columns([3, 1])
             with col_h1:
@@ -736,10 +820,14 @@ with tab3:
             if not cart:
                 st.info("Add SKUs from the lookup panel.")
             else:
-                # Compact list — SKU and description only
+                # Compact list — SKU on top, dimmed description below
                 for item in cart:
-                    st.markdown(f"**{item['sku']}**")
-                    st.caption(item["description"][:30])
+                    st.markdown(
+                        f"**{item['sku']}**<br>"
+                        f"<span style='color: var(--mantine-color-dimmed, #999);'>"
+                        f"{item['description'][:30]}</span>",
+                        unsafe_allow_html=True,
+                    )
 
                 st.divider()
 
