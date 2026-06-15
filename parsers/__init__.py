@@ -7,12 +7,14 @@ Provides unified interface for parsing different manifest formats.
 from .base import ManifestParser, ParseResult
 from .apel_parser import ApelParser
 from .brt_parser import BRTParser
+from .momentum_parser import MomentumParser
 from .ocr_parser import OCRParser
 
 # Registry of available parsers
 PARSERS = {
     "apel": ApelParser,
     "brt": BRTParser,
+    "momentum": MomentumParser,
     "ocr": OCRParser,
 }
 
