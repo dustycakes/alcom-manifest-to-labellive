@@ -88,6 +88,20 @@ PDF Manifest → Streamlit (parse + description lookup) → Zebra ZD421 (direct 
 - **Auto-save edited lookup** — no more data loss on filtered saves
 - **Text-based extraction** — more robust than table extraction across formats
 
+## Completed (Momentum Parser — text-based, 2026-06-15)
+
+- **Momentum no longer sends scanned PDFs** — they now send digital text-layer
+  PDFs, so the OCR path is obsolete for this carrier.
+- **New `MomentumParser`** (`parsers/momentum_parser.py`) — pdfplumber text
+  extraction like Apel/BRT. SKU pulled from the labeled `Part:` field (handles
+  non-standard parts like `TRT-TR-21518-10`), comma-tolerant ticket rows,
+  cross-page SKU context, and bundles the multiple manifests one Momentum PDF
+  can contain.
+- **Registered** as `momentum` → "Momentum Manufacturing" in the dropdown.
+  OCR parser retained as a generic scanned-doc fallback.
+- **Validated** vs `Manifests/Manifests 2026-06-04.PDF`: 25 bunks / 1,383
+  pieces, matching the PDF's printed Grand Totals.
+
 ## Completed (Tires/Axles Tab — 2026-04-06)
 
 - **Tires/Axles Labels Tab (Tab 3)** — SKU Lookup + Print Cart workflow

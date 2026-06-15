@@ -22,6 +22,26 @@ Existing assets: multi-format parser (Apel, BRT, OCR), 334-SKU description looku
 - [ ] Add printer status indicator (`printer_online()`) + preview panel (`preview_label()`)
 - [ ] Progress bar for multi-label jobs
 
+## Momentum Parser — text-based (Completed 2026-06-15)
+
+Momentum switched from scanned image PDFs to digital text-layer PDFs, so the
+OCR path is obsolete for them. Built a dedicated text-based parser like Apel/BRT.
+
+- [x] Confirm new Momentum PDF has a real text layer (pdfplumber, no OCR)
+- [x] New `parsers/momentum_parser.py` (`MomentumParser`, format_id `momentum`)
+- [x] SKU read from the labeled `Part:` field — captures non-standard parts
+      (e.g. `TRT-TR-21518-10`) that a generic `NN-NNNNN-NNNN` regex would drop
+- [x] Comma-tolerant ticket rows (`549011 207 1,188 1,200`); SKU context
+      carried across page breaks; multiple manifests per PDF bundled into one
+      result (`154719+154720+154721`)
+- [x] Registered in `parsers/__init__.py` → auto-appears as "Momentum
+      Manufacturing" in the format dropdown
+- [x] OCR parser kept as generic scanned-doc fallback
+- [x] Validated vs `Manifests/Manifests 2026-06-04.PDF`: 25 bunks / 1,383
+      pieces — matches the PDF's printed Grand Totals (3+11+11 tickets)
+- [ ] (known, low-pri) OCR parser's old Momentum block still has a comma-weight
+      bug; dead for this carrier now, clean up if OCR is ever revisited
+
 ## Tires/Axles Labels Tab (Completed)
 
 - [x] Create `tires_axles_lookup.py` module (49 tires, 96 axles)
