@@ -22,7 +22,7 @@ Existing assets: multi-format parser (Apel, BRT, OCR), 334-SKU description looku
 - [ ] Add printer status indicator (`printer_online()`) + preview panel (`preview_label()`)
 - [ ] Progress bar for multi-label jobs
 
-## Momentum Parser — text-based (Completed 2026-06-15)
+## Momentum Parser — text-based (Completed 2026-06-19)
 
 Momentum switched from scanned image PDFs to digital text-layer PDFs, so the
 OCR path is obsolete for them. Built a dedicated text-based parser like Apel/BRT.

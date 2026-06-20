@@ -88,7 +88,7 @@ PDF Manifest → Streamlit (parse + description lookup) → Zebra ZD421 (direct 
 - **Auto-save edited lookup** — no more data loss on filtered saves
 - **Text-based extraction** — more robust than table extraction across formats
 
-## Completed (Momentum Parser — text-based, 2026-06-15)
+## Completed (Momentum Parser — text-based, 2026-06-19)
 
 - **Momentum no longer sends scanned PDFs** — they now send digital text-layer
   PDFs, so the OCR path is obsolete for this carrier.
